@@ -1,8 +1,11 @@
+/* ======================= */
+/* Container & Layout */
+/* ======================= */
 .news-container {
   display: flex;
   gap: 2rem;
   padding: 2rem;
-  font-family: Arial, sans-serif;
+  font-family: 'Segoe UI', Tahoma,  Verdana;
   direction: rtl;
 }
 
@@ -13,7 +16,7 @@
   padding-right: 1rem;
 }
 .news-sidebar h2 {
-  margin-bottom: 1rem;
+  margin-bottom: 2rem;
 }
 
 /* Main Grid */
@@ -26,7 +29,9 @@
   gap: 1rem;
 }
 
-/* Card */
+/* ======================= */
+/* Cards */
+/* ======================= */
 .news-card {
   border: 1px solid #ccc;
   border-radius: 8px;
@@ -36,7 +41,6 @@
   flex-direction: column;
   transition: transform 0.2s, box-shadow 0.2s;
 }
-
 .news-card:hover {
   transform: translateY(-3px);
   box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
@@ -57,23 +61,27 @@
   flex-direction: column;
   gap: 0.5rem;
 }
-
 .news-card-content h3 {
-  margin: 0;
   font-weight: bold;
+  text-align: center  ;
 }
-
 .news-date {
   font-size: 0.85rem;
   color: #777;
+  margin-bottom: 5px;
 }
 
-/* Tags */
-.news-tags {
+/* ======================= */
+/* Tags & Badge */
+/* ======================= */
+.news-tags, .popup-tags-container {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 0.3rem;
+  
 }
+
 .tag {
   display: inline-block;
   padding: 4px 8px;
@@ -84,7 +92,22 @@
   margin: 2px;
 }
 
+.category-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: white;
+  margin-top: 15px;
+  margin-bottom: 8px;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+
+/* ======================= */
 /* Popup */
+/* ======================= */
 .news-popup-overlay {
   position: fixed;
   top: 0;
@@ -97,16 +120,6 @@
   justify-content: center;
   z-index: 1000;
 }
-.category-badge {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: white;
-  margin-bottom: 8px;
-}
-
 .news-popup {
   background-color: #fff;
   border-radius: 8px;
@@ -117,7 +130,6 @@
   padding: 2rem;
   position: relative;
 }
-
 .popup-close {
   position: absolute;
   top: 1rem;
@@ -127,20 +139,17 @@
   background: none;
   cursor: pointer;
 }
-
 .popup-media {
   width: 100%;
   max-height: 300px;
   margin-bottom: 1rem;
   object-fit: cover;
 }
-
 .popup-text {
   white-space: pre-wrap;
   line-height: 1.4;
   margin-bottom: 1rem;
 }
-
 .published-date {
   color: #555;
 }
@@ -162,11 +171,9 @@
   transition: all 0.2s;
   vertical-align: middle;
 }
-
 .checkbox-label input[type="checkbox"]:hover {
   transform: scale(1.1);
 }
-
 .checkbox-label input[type="checkbox"]:checked::after {
   content: "✔";
   position: absolute;
@@ -175,7 +182,6 @@
   font-size: 16px;
   color: white;
 }
-
 .checkbox-label {
   display: flex;
   align-items: center;
@@ -187,25 +193,82 @@
 
 /* Category Borders & Checked Colors */
 .category-1 input[type="checkbox"] { border-color: #4DA1FF; }
-.category-2 input[type="checkbox"] { border-color: #6CB8FF; }
-.category-3 input[type="checkbox"] { border-color: #4EC5D4; }
-.category-4 input[type="checkbox"] { border-color: #7AD3E0; }
-.category-5 input[type="checkbox"] { border-color: #8ED1FF; }
-.category-6 input[type="checkbox"] { border-color: #A3E0FF; }
-.category-7 input[type="checkbox"] { border-color: #66A6E8; }
-.category-8 input[type="checkbox"] { border-color: #5FC7C0; }
-.category-9 input[type="checkbox"] { border-color: #8FB7FF; }
-.category-10 input[type="checkbox"] { border-color: #7FA8D6; }
-.category-11 input[type="checkbox"] { border-color: #A6C8FF; }
-
 .category-1 input[type="checkbox"]:checked { background-color: #4DA1FF; border-color: #4DA1FF; }
+.category-2 input[type="checkbox"] { border-color: #6CB8FF; }
 .category-2 input[type="checkbox"]:checked { background-color: #6CB8FF; border-color: #6CB8FF; }
+.category-3 input[type="checkbox"] { border-color: #4EC5D4; }
 .category-3 input[type="checkbox"]:checked { background-color: #4EC5D4; border-color: #4EC5D4; }
+.category-4 input[type="checkbox"] { border-color: #7AD3E0; }
 .category-4 input[type="checkbox"]:checked { background-color: #7AD3E0; border-color: #7AD3E0; }
+.category-5 input[type="checkbox"] { border-color: #8ED1FF; }
 .category-5 input[type="checkbox"]:checked { background-color: #8ED1FF; border-color: #8ED1FF; }
+.category-6 input[type="checkbox"] { border-color: #A3E0FF; }
 .category-6 input[type="checkbox"]:checked { background-color: #A3E0FF; border-color: #A3E0FF; }
+.category-7 input[type="checkbox"] { border-color: #66A6E8; }
 .category-7 input[type="checkbox"]:checked { background-color: #66A6E8; border-color: #66A6E8; }
+.category-8 input[type="checkbox"] { border-color: #5FC7C0; }
 .category-8 input[type="checkbox"]:checked { background-color: #5FC7C0; border-color: #5FC7C0; }
+.category-9 input[type="checkbox"] { border-color: #8FB7FF; }
 .category-9 input[type="checkbox"]:checked { background-color: #8FB7FF; border-color: #8FB7FF; }
+.category-10 input[type="checkbox"] { border-color: #7FA8D6; }
 .category-10 input[type="checkbox"]:checked { background-color: #7FA8D6; border-color: #7FA8D6; }
+.category-11 input[type="checkbox"] { border-color: #A6C8FF; }
 .category-11 input[type="checkbox"]:checked { background-color: #A6C8FF; border-color: #A6C8FF; }
+
+/* ======================= */
+/* Responsive Design */
+/* ======================= */
+
+/* Desktop (default >=1024px) */
+@media (min-width: 1024px) {
+  .news-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Tablet (>=768px && <1024px) */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .news-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Mobile (<768px) */
+@media (max-width: 767px) {
+  .news-container {
+    flex-direction: column;
+    padding: 1rem;
+  }
+
+  .news-sidebar {
+    min-width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #ddd;
+    padding: 0.5rem 0;
+    margin-bottom: 1rem;
+  }
+
+  .news-grid { grid-template-columns: 1fr; }
+
+  .news-card {
+    font-size: 0.9rem;
+  }
+
+  .news-card-content h3 { font-size: 1rem; }
+
+  .category-badge {
+    font-size: 0.75rem;
+    padding: 3px 8px;
+  }
+
+  .tag {
+    font-size: 9px;
+    padding: 2px 5px;
+  }
+
+  .news-popup {
+    width: 95%;
+    max-height: 90%;
+    padding: 1rem;
+  }
+
+  .popup-media {
+    max-height: 200px;
+  }
+}

@@ -77,7 +77,6 @@ function News() {
           <div className="news-grid">
             {filteredNews.map((n) => {
               const hasImage = n.content_img?.trim().length > 0;
-              const hasVideo = n.content_video?.trim().length > 0;
 
               const tags = n.tags
                 ? n.tags
@@ -93,11 +92,10 @@ function News() {
                   style={{ borderRight: `6px solid ${categoryColors[n.category_id]}` }}
                   onClick={() => openPopup(n)}
                 >
-                  {hasImage ? (
-                    <img src={n.content_img} alt={n.title} className="news-card-media" />
-                  ) : hasVideo ? (
-                    <video src={n.content_video} className="news-card-media" controls />
-                  ) : null}
+                {hasImage && (
+                      <img src={n.content_img} alt={n.title} className="news-card-media" />
+                    )}
+
 
                   <div className="news-card-content">
                     <h3>{n.title}</h3>
@@ -143,27 +141,33 @@ function News() {
 
             <h2>{popupContent.title}</h2>
 
-            {popupContent.content_video?.trim().length > 0 && (
-              <video controls src={popupContent.content_video} className="popup-media" />
-            )}
+            {popupContent.content_img?.trim().length > 0 && (
+  <img src={popupContent.content_img} alt={popupContent.title} className="popup-media" />
+)}
+
 
             {popupContent.content_text && (
               <p className="popup-text">{popupContent.content_text}</p>
             )}
 
-            {popupContent.tags?.trim() && (
-              <div className="news-tags">
-                {popupContent.tags
-                  .split(",")
-                  .map((t) => t.trim())
-                  .filter((t) => t.length > 0)
-                  .map((tag, idx) => (
-                    <span key={idx} className="tag">
-                      #{tag.replace(/_/g, " ")}
-                    </span>
-                  ))}
-              </div>
-            )}
+          {popupContent.tags?.trim() && (
+  <div className="popup-tags-container">
+    {popupContent.tags
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0)
+      .map((tag, idx) => (
+        <span
+          key={idx}
+          className="tag"
+          style={{ backgroundColor: categoryColors[popupContent.category_id] }}
+        >
+          #{tag.replace(/_/g, " ")}
+        </span>
+      ))}
+  </div>
+)}
+
 
             <p className="published-date">
               <strong>تاريخ النشر:</strong>{" "}
