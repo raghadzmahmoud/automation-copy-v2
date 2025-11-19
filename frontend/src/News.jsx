@@ -7,20 +7,20 @@ function News() {
   const [selectedCategories, setSelectedCategories] = useState([]);
   const [newsList, setNewsList] = useState([]);
   const [popupContent, setPopupContent] = useState(null);
-const categoryColors = {
-  1: "#4DA1FF", // أزرق بارد
-  2: "#6CB8FF", // أزرق سماوي
-  3: "#4EC5D4", // فيروز بارد
-  4: "#7AD3E0", // سماوي باهت
-  5: "#8ED1FF", // أزرق باهت
-  6: "#A3E0FF", // ثلجي فاتح
-  7: "#66A6E8", // أزرق ضبابي
-  8: "#5FC7C0", // تركوازي
-  9: "#8FB7FF", // أزرق بنفسجي باهت
-  10: "#7FA8D6", // أزرق رمادي
-  11: "#A6C8FF" // أزرق ثلجي لطيف
-};
 
+  const categoryColors = {
+    1: "#4DA1FF",
+    2: "#6CB8FF",
+    3: "#4EC5D4",
+    4: "#7AD3E0",
+    5: "#8ED1FF",
+    6: "#A3E0FF",
+    7: "#66A6E8",
+    8: "#5FC7C0",
+    9: "#8FB7FF",
+    10: "#7FA8D6",
+    11: "#A6C8FF"
+  };
 
   useEffect(() => {
     fetch(`${API_URL}/news-with-categories`)
@@ -56,7 +56,7 @@ const categoryColors = {
         <h2>الأقسام</h2>
         {categories.map((cat) => (
           <div key={cat.id}>
-            <label>
+            <label className={`checkbox-label category-${cat.id}`}>
               <input
                 type="checkbox"
                 checked={selectedCategories.includes(cat.id)}
@@ -87,13 +87,12 @@ const categoryColors = {
                 : [];
 
               return (
-<div
-  key={n.id}
-  className="news-card"
-  style={{ borderRight: `6px solid ${categoryColors[n.category_id]}` }}
-  onClick={() => openPopup(n)}
->
-                  {/* الكارد الخارجي: صورة أو فيديو */}
+                <div
+                  key={n.id}
+                  className="news-card"
+                  style={{ borderRight: `6px solid ${categoryColors[n.category_id]}` }}
+                  onClick={() => openPopup(n)}
+                >
                   {hasImage ? (
                     <img src={n.content_img} alt={n.title} className="news-card-media" />
                   ) : hasVideo ? (
@@ -102,25 +101,23 @@ const categoryColors = {
 
                   <div className="news-card-content">
                     <h3>{n.title}</h3>
-<div
-  className="category-badge"
-  style={{ backgroundColor: categoryColors[n.category_id] }}
->
-  {categories.find(c => c.id === n.category_id)?.name}
-</div>
+                    <div
+                      className="category-badge"
+                      style={{ backgroundColor: categoryColors[n.category_id] }}
+                    >
+                      {categories.find(c => c.id === n.category_id)?.name}
+                    </div>
 
-                    {/* Tags */}
                     {tags.length > 0 && (
                       <div className="news-tags">
                         {tags.map((tag, idx) => (
-                      <span
-  key={idx}
-  className="tag"
-  style={{ backgroundColor: categoryColors[n.category_id] }}
->
-  #{tag.replace(/_/g, " ")}
-</span>
-
+                          <span
+                            key={idx}
+                            className="tag"
+                            style={{ backgroundColor: categoryColors[n.category_id] }}
+                          >
+                            #{tag.replace(/_/g, " ")}
+                          </span>
                         ))}
                       </div>
                     )}
@@ -146,17 +143,14 @@ const categoryColors = {
 
             <h2>{popupContent.title}</h2>
 
-            {/* Video */}
             {popupContent.content_video?.trim().length > 0 && (
               <video controls src={popupContent.content_video} className="popup-media" />
             )}
 
-            {/* Text content */}
             {popupContent.content_text && (
               <p className="popup-text">{popupContent.content_text}</p>
             )}
 
-            {/* Tags in popup */}
             {popupContent.tags?.trim() && (
               <div className="news-tags">
                 {popupContent.tags
