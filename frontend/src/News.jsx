@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import "./News.css";
+import { API_URL } from './config';
 
 function News() {
   const [categories, setCategories] = useState([]);
@@ -22,7 +23,7 @@ const categoryColors = {
 
 
   useEffect(() => {
-    fetch("http://localhost:5000/api/news-with-categories")
+    fetch(`${API_URL}/news-with-categories`)
       .then((res) => res.json())
       .then((data) => {
         setCategories(data.categories);
