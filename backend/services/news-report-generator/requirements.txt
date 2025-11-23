@@ -21,3 +21,12 @@ pydantic==2.5.0
 python-dateutil==2.8.2
 numpy==1.26.2
 nltk==3.8.1
+
+Django==4.2.7
+djangorestframework==3.14.0
+django-cors-headers==4.3.0
+python-dotenv==1.0.0
+psycopg2-binary==2.9.9
+django-filter==23.5
+Pillow==10.1.0
+drf-yasg==1.21.7
