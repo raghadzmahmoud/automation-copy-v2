@@ -4,16 +4,13 @@ python-dotenv==1.0.0
 requests==2.31.0
 urllib3==2.1.0
 
-# AI/ML
+# AI/ML - Google Gemini
 google-genai
 
 # Database
 psycopg2-binary==2.9.9
-sqlalchemy==2.0.23
-alembic==1.13.1
 
 # Scheduler
-apscheduler==3.10.4
 schedule==1.2.1
 
 # Validation
@@ -22,8 +19,6 @@ pydantic-settings==2.1.0
 
 # Utilities
 python-dateutil==2.8.2
-numpy==1.26.2
-nltk==3.8.1
 
 Django==4.2.7
 djangorestframework==3.14.0
