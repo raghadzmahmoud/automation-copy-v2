@@ -6,6 +6,7 @@ urllib3==2.1.0
 
 # AI/ML
 google-genai
+
 # Database
 psycopg2-binary==2.9.9
 sqlalchemy==2.0.23
@@ -13,9 +14,11 @@ alembic==1.13.1
 
 # Scheduler
 apscheduler==3.10.4
+schedule==1.2.1
 
 # Validation
 pydantic==2.5.0
+pydantic-settings==2.1.0
 
 # Utilities
 python-dateutil==2.8.2
@@ -30,3 +33,6 @@ psycopg2-binary==2.9.9
 django-filter==23.5
 Pillow==10.1.0
 drf-yasg==1.21.7
+
+
+
