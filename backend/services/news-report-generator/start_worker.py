@@ -42,9 +42,9 @@ def main():
     logger.info("Background Worker Started")
     logger.info("=" * 60)
     
-    schedule.every(2).minutes.do(run_scraper)
-    schedule.every(5).minutes.do(run_clustering)
-    schedule.every(3).minutes.do(run_reports)
+    schedule.every(10).minutes.do(run_scraper)
+    schedule.every(1).hours.do(run_clustering)
+    schedule.every(1).hours.do(run_reports)
     
     # Run initial scraper
     logger.info("Running initial scraper...")
