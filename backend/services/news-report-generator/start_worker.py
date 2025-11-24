@@ -3,6 +3,7 @@ import schedule
 import time
 import logging
 from datetime import datetime
+import threading
 
 logging.basicConfig(
     level=logging.INFO,
@@ -10,29 +11,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Lock to prevent overlapping jobs
+job_lock = threading.Lock()
+
+def safe_run(job_func, job_name):
+    """Run a job safely: wait if another job is running"""
+    logger.info(f"{job_name} waiting for lock if needed...")
+    with job_lock:  # هذا رح ينتظر تلقائياً إذا lock مشغول
+        logger.info(f"Starting {job_name}...")
+        try:
+            job_func()
+        except Exception as e:
+            logger.error(f"{job_name} error: {e}")
+        logger.info(f"{job_name} finished.")
+
 def run_scraper():
-    logger.info("Starting scraper job...")
-    try:
-        from cron.scraper_job import scrape_news
-        scrape_news()
-    except Exception as e:
-        logger.error(f"Scraper error: {e}")
+    from cron.scraper_job import scrape_news
+    safe_run(scrape_news, "Scraper Job")
 
 def run_clustering():
-    logger.info("Starting clustering job...")
-    try:
-        from cron.clustering_job import cluster_news
-        cluster_news()
-    except Exception as e:
-        logger.error(f"Clustering error: {e}")
+    from cron.clustering_job import cluster_news
+    safe_run(cluster_news, "Clustering Job")
 
 def run_reports():
-    logger.info("Starting reports job...")
-    try:
-        from cron.reports_job import generate_reports
-        generate_reports()
-    except Exception as e:
-        logger.error(f"Reports error: {e}")
+    from cron.reports_job import generate_reports
+    safe_run(generate_reports, "Reports Job")
 
 def main():
     logger.info("=" * 60)
@@ -40,9 +43,10 @@ def main():
     logger.info("=" * 60)
     
     schedule.every(10).minutes.do(run_scraper)
-    schedule.every(1).hours.do(run_clustering)
-    schedule.every(1).hours.do(run_reports)
+    schedule.every(10).hours.do(run_clustering)
+    schedule.every(10).hours.do(run_reports)
     
+    # Run initial scraper
     logger.info("Running initial scraper...")
     run_scraper()
     
