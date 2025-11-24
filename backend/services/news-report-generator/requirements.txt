@@ -1,21 +1,23 @@
-# Core Dependencies
+# FastAPI Core
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# News Collection
 feedparser==6.0.10
-python-dotenv==1.0.0
 requests==2.31.0
 urllib3==2.1.0
 
-# AI/ML - Google Gemini
+# AI/ML
 google-genai
 
 # Database
 psycopg2-binary==2.9.9
 
-# Scheduler
-schedule==1.2.1
-
-# Validation
-pydantic==2.5.0
-pydantic-settings==2.1.0
+# Background Jobs
+apscheduler==3.10.4
 
 # Utilities
+python-dotenv==1.0.0
 python-dateutil==2.8.2
