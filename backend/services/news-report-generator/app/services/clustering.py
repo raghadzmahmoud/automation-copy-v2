@@ -73,6 +73,12 @@ class NewsClusterer:
                 tags_set = set(self._parse_tags(tags_str))
                 news_ids_set = set(news_ids) if news_ids and news_ids[0] is not None else set()
                 
+                # تأكد من timezone
+                if created_at and created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                if updated_at and updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                
                 clusters[cluster_id] = {
                     'tags': tags_set,
                     'category_id': category_id,
@@ -177,12 +183,17 @@ class NewsClusterer:
         
         news_list = []
         for row in rows:
+            # تأكد من أن التاريخ timezone-aware
+            published_at = row[4]
+            if published_at and published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            
             news_list.append({
                 'id': row[0],
                 'title': row[1],
                 'tags': self._parse_tags(row[2]),
                 'category_id': row[3],
-                'published_date': row[4]
+                'published_date': published_at
             })
         
         return news_list
@@ -226,16 +237,33 @@ class NewsClusterer:
                 if i == j or candidate_news['id'] in used_news_ids:
                     continue
                 
-                # فحص Time
-                time_diff = abs((anchor_news['published_date'] - candidate_news['published_date']).total_seconds() / 3600)
+                # فحص Time مع التأكد من timezone
+                anchor_time = anchor_news['published_date']
+                candidate_time = candidate_news['published_date']
+                
+                if anchor_time and anchor_time.tzinfo is None:
+                    anchor_time = anchor_time.replace(tzinfo=timezone.utc)
+                if candidate_time and candidate_time.tzinfo is None:
+                    candidate_time = candidate_time.replace(tzinfo=timezone.utc)
+                
+                time_diff = abs((anchor_time - candidate_time).total_seconds() / 3600)
                 if time_diff > self.time_window_hours:
                     continue
                 
-                # حساب Similarity
-                similarity = self._calculate_tag_similarity(
+                # حساب Tag Similarity
+                tag_similarity = self._calculate_tag_similarity(
                     anchor_news['tags'],
                     candidate_news['tags']
                 )
+                
+                # حساب Title Similarity
+                title_similarity = self._calculate_title_similarity(
+                    anchor_news['title'],
+                    candidate_news['title']
+                )
+                
+                # دمج التشابه النهائي (وزن أكبر للـ Tags)
+                similarity = (tag_similarity * 0.7) + (title_similarity * 0.3)
                 
                 if similarity >= self.similarity_threshold:
                     cluster_news_ids.append(candidate_news['id'])
@@ -260,12 +288,20 @@ class NewsClusterer:
         best_match_id = None
         best_similarity = 0.0
         
+        # تأكد من أن news_time له timezone
+        if news_time and news_time.tzinfo is None:
+            news_time = news_time.replace(tzinfo=timezone.utc)
+        
         for cluster_id, cluster_data in self.existing_clusters.items():
             if cluster_data['category_id'] != category_id:
                 continue
             
             cluster_time = cluster_data.get('created_at')
             if cluster_time:
+                # تأكد من أن cluster_time له timezone
+                if cluster_time.tzinfo is None:
+                    cluster_time = cluster_time.replace(tzinfo=timezone.utc)
+                
                 time_diff = abs((news_time - cluster_time).total_seconds() / 3600)
                 if time_diff > self.time_window_hours:
                     continue
@@ -298,7 +334,6 @@ class NewsClusterer:
                     self.existing_clusters[cluster_id]['news_ids'].add(news_id)
             
             if added_count > 0:
-                # ✅ تحديث news_count + updated_at
                 now = datetime.now(timezone.utc)
                 self.cursor.execute("""
                     UPDATE news_clusters 
@@ -307,7 +342,6 @@ class NewsClusterer:
                     WHERE id = %s
                 """, (added_count, now, cluster_id))
                 
-                # تحديث الـ cache المحلي
                 self.existing_clusters[cluster_id]['updated_at'] = now
             
             self.conn.commit()
@@ -325,7 +359,6 @@ class NewsClusterer:
             description = self._generate_cluster_description(list(tags), len(news_ids))
             tags_str = ", ".join(list(tags)[:10])
             
-            # ✅ إضافة created_at و updated_at
             self.cursor.execute("""
                 INSERT INTO news_clusters (description, tags, category_id, news_count, created_at, updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s)
@@ -363,7 +396,6 @@ class NewsClusterer:
     def _clean_old_clusters(self):
         """حذف clusters قديمة"""
         try:
-            # حذف أعضاء المجموعات أولاً ثم المجموعات
             self.cursor.execute("DELETE FROM news_cluster_members")
             self.cursor.execute("DELETE FROM news_clusters")
             self.conn.commit()
@@ -385,13 +417,51 @@ class NewsClusterer:
         return dict(categories)
     
     def _calculate_tag_similarity(self, tags1: List[str], tags2: List[str]) -> float:
-        """حساب التشابه بين lists"""
+        """حساب التشابه بين lists مع تنظيف أفضل"""
         if not tags1 or not tags2:
             return 0.0
-        set1 = set(tags1)
-        set2 = set(tags2)
+        
+        # تنظيف وتوحيد الـ tags
+        def normalize_tags(tags):
+            normalized = []
+            for tag in tags:
+                cleaned = tag.strip().replace('_', ' ').replace('-', ' ')
+                cleaned = cleaned.lower()
+                if cleaned:
+                    normalized.append(cleaned)
+            return set(normalized)
+        
+        set1 = normalize_tags(tags1)
+        set2 = normalize_tags(tags2)
+        
+        if not set1 or not set2:
+            return 0.0
+        
         intersection = len(set1 & set2)
         union = len(set1 | set2)
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _calculate_title_similarity(self, title1: str, title2: str) -> float:
+        """حساب التشابه بين العناوين"""
+        if not title1 or not title2:
+            return 0.0
+        
+        # تقسيم لكلمات وتنظيف
+        words1 = {word for word in title1.lower().split() if len(word) > 2}
+        words2 = {word for word in title2.lower().split() if len(word) > 2}
+        
+        # إزالة stop words عربية شائعة
+        stop_words = {'في', 'من', 'إلى', 'على', 'عن', 'مع', 'بعد', 'قبل', 'أن', 'ال', 'و', 'أو', 'هذا', 'هذه', 'ذلك'}
+        words1 = words1 - stop_words
+        words2 = words2 - stop_words
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        
         return intersection / union if union > 0 else 0.0
     
     def _calculate_tag_similarity_sets(self, set1: set, set2: set) -> float:

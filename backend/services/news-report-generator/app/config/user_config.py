@@ -13,7 +13,7 @@ class UserConfig(BaseModel):
     # Clustering (every 1 hour, look back 48 hours)
     clustering_enabled: bool = True
     clustering_time_window_hours: int = 48  # ← Changed to 48
-    clustering_min_similarity: float = 0.3
+    clustering_min_similarity: float = 0.15
     
     # Reports (every 1 hour, from clusters updated in last 1 hour)
     auto_generate_reports: bool = True

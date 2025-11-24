@@ -17,7 +17,10 @@ schema_view = get_schema_view(
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/v1/', include('api.urls')),
+    
+    # ✅ API endpoints
+    path('api/v1/news/', include('news.urls')),
+    
     path('api/auth/', include('rest_framework.urls')),
     
     # API Documentation
