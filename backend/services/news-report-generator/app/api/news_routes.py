@@ -55,10 +55,9 @@ def get_db():
 # ============================================
 # Endpoints
 # ============================================
-
 @router.get("/", response_model=List[NewsListItem])
 async def list_news(
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=-1, le=10000),  # ← تغيير: السماح بـ -1 و max أكبر
     offset: int = Query(0, ge=0),
     source_id: Optional[int] = None,
     category_id: Optional[int] = None,
@@ -67,7 +66,7 @@ async def list_news(
     """
     Get list of news items
     
-    - **limit**: Number of items (1-100)
+    - **limit**: Number of items (-1 for all, 1-10000)
     - **offset**: Skip items
     - **source_id**: Filter by source
     - **category_id**: Filter by category
@@ -101,8 +100,12 @@ async def list_news(
             query += " AND (rn.title ILIKE %s OR rn.content_text ILIKE %s)"
             params.extend([f"%{search}%", f"%{search}%"])
         
-        query += " ORDER BY rn.published_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
+        query += " ORDER BY rn.published_at DESC"
+        
+        # ← إضافة: إذا limit != -1، أضف LIMIT و OFFSET
+        if limit != -1:
+            query += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
         
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -125,7 +128,6 @@ async def list_news(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/{news_id}", response_model=NewsItem)
 async def get_news(news_id: int):
