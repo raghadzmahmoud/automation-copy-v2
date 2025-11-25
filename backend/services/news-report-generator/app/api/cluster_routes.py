@@ -63,7 +63,7 @@ def get_db():
 
 @router.get("/", response_model=List[ClusterItem])
 async def list_clusters(
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=-1, le=10000),  # ← تغيير
     offset: int = Query(0, ge=0),
     category_id: Optional[int] = None
 ):
@@ -87,8 +87,12 @@ async def list_clusters(
             query += " AND nc.category_id = %s"
             params.append(category_id)
         
-        query += " ORDER BY nc.created_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
+        query += " ORDER BY nc.created_at DESC"
+        
+        # ← إضافة
+        if limit != -1:
+            query += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
         
         cursor.execute(query, params)
         rows = cursor.fetchall()

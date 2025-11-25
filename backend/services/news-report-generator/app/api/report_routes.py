@@ -39,6 +39,15 @@ class ReportListItem(BaseModel):
     created_at: datetime
 
 
+class NewsListItem(BaseModel):
+    id: int
+    title: str
+    source_name: Optional[str] = None
+    category_name: Optional[str] = None
+    published_at: Optional[datetime] = None
+    tags: Optional[List[str]] = None
+
+
 class ReportPublish(BaseModel):
     status: str = "published"
 
@@ -58,7 +67,7 @@ def get_db():
 
 @router.get("/", response_model=List[ReportListItem])
 async def list_reports(
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=-1, le=10000),  # ← تغيير
     offset: int = Query(0, ge=0),
     status: Optional[str] = None
 ):
@@ -80,8 +89,12 @@ async def list_reports(
             query += " AND status = %s"
             params.append(status)
         
-        query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
+        query += " ORDER BY created_at DESC"
+        
+        # ← إضافة
+        if limit != -1:
+            query += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
         
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -188,6 +201,52 @@ async def get_report_by_cluster(cluster_id: int):
         
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def list_reports(limit: int = 20, offset: int = 0, status: Optional[str] = None) -> List[ReportListItem]:
+    """Helper to list reports with optional status filtering."""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT id, cluster_id, title, status, source_news_count, created_at
+            FROM generated_report
+            WHERE 1=1
+        """
+        params = []
+
+        if status:
+            query += " AND status = %s"
+            params.append(status)
+
+        query += " ORDER BY created_at DESC"
+
+        # apply limit/offset if provided (limit of -1 or None will return all)
+        if limit is not None and limit != -1:
+            query += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        results: List[ReportListItem] = []
+        for row in rows:
+            results.append(ReportListItem(
+                id=row[0],
+                cluster_id=row[1],
+                title=row[2],
+                status=row[3],
+                source_news_count=row[4],
+                created_at=row[5]
+            ))
+
+        cursor.close()
+        conn.close()
+        return results
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
