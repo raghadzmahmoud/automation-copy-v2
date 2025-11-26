@@ -61,26 +61,27 @@ def get_db():
 # Endpoints
 # ============================================
 
-@router.get("/", response_model=List[ClusterItem])
+@router.get("/", response_model=List[ClusterDetail])
 async def list_clusters(
-    limit: int = Query(20, ge=-1, le=10000),  # ← تغيير
+    limit: int = Query(20, ge=-1, le=10000),
     offset: int = Query(0, ge=0),
     category_id: Optional[int] = None
 ):
-    """Get list of news clusters"""
+    """Get list of clusters with full detail (same as single cluster)"""
     try:
         conn = get_db()
         cursor = conn.cursor()
         
+        # 1) Get clusters
         query = """
             SELECT 
-                nc.id, nc.description, nc.tags, nc.category_id,
-                c.name as category_name, nc.news_count,
-                nc.created_at, nc.updated_at
+                nc.*,
+                c.name AS category_name
             FROM news_clusters nc
             LEFT JOIN categories c ON nc.category_id = c.id
             WHERE 1=1
         """
+        
         params = []
         
         if category_id:
@@ -89,25 +90,53 @@ async def list_clusters(
         
         query += " ORDER BY nc.created_at DESC"
         
-        # ← إضافة
         if limit != -1:
             query += " LIMIT %s OFFSET %s"
             params.extend([limit, offset])
         
         cursor.execute(query, params)
-        rows = cursor.fetchall()
+        clusters_rows = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
         
         clusters = []
-        for row in rows:
-            clusters.append(ClusterItem(
-                id=row[0],
-                description=row[1],
-                tags=row[2],
-                category_id=row[3],
-                category_name=row[4] or "Other",
-                news_count=row[5],
-                created_at=row[6],
-                updated_at=row[7]
+        
+        # 2) For each cluster → fetch news items
+        for row in clusters_rows:
+            row_dict = dict(zip(columns, row))
+            cluster_id = row_dict["id"]
+            
+            # Fetch news items for this cluster
+            cursor.execute("""
+                SELECT 
+                    rn.id, rn.title, s.name as source_name,
+                    rn.published_at, rn.tags
+                FROM raw_news rn
+                JOIN news_cluster_members ncm ON rn.id = ncm.news_id
+                LEFT JOIN sources s ON rn.source_id = s.id
+                WHERE ncm.cluster_id = %s
+                ORDER BY rn.published_at DESC
+            """, (cluster_id,))
+            
+            news_items = []
+            for news_row in cursor.fetchall():
+                news_items.append({
+                    "id": news_row[0],
+                    "title": news_row[1],
+                    "source_name": news_row[2] or "Unknown",
+                    "published_at": news_row[3].isoformat(),
+                    "tags": news_row[4]
+                })
+            
+            clusters.append(ClusterDetail(
+                id=row_dict["id"],
+                description=row_dict.get("description"),
+                tags=row_dict.get("tags"),
+                category_id=row_dict["category_id"],
+                category_name=row_dict.get("category_name") or "Other",
+                news_count=row_dict.get("news_count", 0),
+                created_at=row_dict["created_at"],
+                updated_at=row_dict["updated_at"],
+                news_items=news_items
             ))
         
         cursor.close()
@@ -117,6 +146,7 @@ async def list_clusters(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.get("/{cluster_id}", response_model=ClusterDetail)

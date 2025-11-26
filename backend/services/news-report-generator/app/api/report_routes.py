@@ -65,59 +65,61 @@ def get_db():
 # Endpoints
 # ============================================
 
-@router.get("/", response_model=List[ReportListItem])
+@router.get("/", response_model=List[ReportItem])
 async def list_reports(
-    limit: int = Query(20, ge=-1, le=10000),  # ← تغيير
+    limit: int = Query(20, ge=-1, le=10000),
     offset: int = Query(0, ge=0),
     status: Optional[str] = None
 ):
-    """Get list of generated reports"""
+    """Get list of reports (full details like single report)"""
     try:
         conn = get_db()
         cursor = conn.cursor()
-        
+
         query = """
             SELECT 
-                id, cluster_id, title, status,
-                source_news_count, created_at
+                id, cluster_id, title, content, status,
+                source_news_count, published_at,
+                created_at, updated_at
             FROM generated_report
             WHERE 1=1
         """
         params = []
-        
+
         if status:
             query += " AND status = %s"
             params.append(status)
-        
+
         query += " ORDER BY created_at DESC"
-        
-        # ← إضافة
+
         if limit != -1:
             query += " LIMIT %s OFFSET %s"
             params.extend([limit, offset])
-        
+
         cursor.execute(query, params)
         rows = cursor.fetchall()
-        
+
         reports = []
         for row in rows:
-            reports.append(ReportListItem(
+            reports.append(ReportItem(
                 id=row[0],
                 cluster_id=row[1],
                 title=row[2],
-                status=row[3],
-                source_news_count=row[4],
-                created_at=row[5]
+                content=row[3],
+                status=row[4],
+                source_news_count=row[5],
+                published_at=row[6],
+                created_at=row[7],
+                updated_at=row[8],
             ))
-        
+
         cursor.close()
         conn.close()
-        
+
         return reports
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/{report_id}", response_model=ReportItem)
 async def get_report(report_id: int):
