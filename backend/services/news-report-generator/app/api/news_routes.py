@@ -55,32 +55,26 @@ def get_db():
 # ============================================
 # Endpoints
 # ============================================
-@router.get("/", response_model=List[NewsListItem])
+@router.get("/", response_model=List[NewsItem])
 async def list_news(
-    limit: int = Query(20, ge=-1, le=10000),  # ← تغيير: السماح بـ -1 و max أكبر
+    limit: int = Query(20, ge=-1, le=10000),
     offset: int = Query(0, ge=0),
     source_id: Optional[int] = None,
     category_id: Optional[int] = None,
     search: Optional[str] = None
 ):
-    """
-    Get list of news items
-    
-    - **limit**: Number of items (-1 for all, 1-10000)
-    - **offset**: Skip items
-    - **source_id**: Filter by source
-    - **category_id**: Filter by category
-    - **search**: Search in title and content
-    """
+    """Return full detailed news objects (same as single news endpoint)"""
     try:
         conn = get_db()
         cursor = conn.cursor()
         
-        # Build query
+        # Full detailed query (same fields as get_news)
         query = """
             SELECT 
-                rn.id, rn.title, s.name as source_name,
-                c.name as category_name, rn.published_at, rn.tags
+                rn.id, rn.title, rn.content_text, rn.content_img,
+                rn.content_video, rn.tags, rn.source_id, s.name AS source_name,
+                rn.language_id, rn.category_id, c.name AS category_name,
+                rn.published_at, rn.collected_at
             FROM raw_news rn
             LEFT JOIN sources s ON rn.source_id = s.id
             LEFT JOIN categories c ON rn.category_id = c.id
@@ -102,7 +96,6 @@ async def list_news(
         
         query += " ORDER BY rn.published_at DESC"
         
-        # ← إضافة: إذا limit != -1، أضف LIMIT و OFFSET
         if limit != -1:
             query += " LIMIT %s OFFSET %s"
             params.extend([limit, offset])
@@ -112,13 +105,20 @@ async def list_news(
         
         news_list = []
         for row in rows:
-            news_list.append(NewsListItem(
+            news_list.append(NewsItem(
                 id=row[0],
                 title=row[1],
-                source_name=row[2] or "Unknown",
-                category_name=row[3] or "Other",
-                published_at=row[4],
-                tags=row[5]
+                content_text=row[2],
+                content_img=row[3],
+                content_video=row[4],
+                tags=row[5],
+                source_id=row[6],
+                source_name=row[7] or "Unknown",
+                language_id=row[8],
+                category_id=row[9],
+                category_name=row[10] or "Other",
+                published_at=row[11],
+                collected_at=row[12]
             ))
         
         cursor.close()
@@ -128,6 +128,7 @@ async def list_news(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/{news_id}", response_model=NewsItem)
 async def get_news(news_id: int):
