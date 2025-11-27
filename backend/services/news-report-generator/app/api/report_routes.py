@@ -377,7 +377,7 @@ async def trigger_report_generation(background_tasks: BackgroundTasks):
         "message": "Report generation started in background",
         "status": "processing"
     }
-@router.get("/reports/{report_id}/images")
+@router.get("/reports/{report_id}/raw-news-images")
 async def get_report_images(report_id: int):
     try:
         conn = get_db()
