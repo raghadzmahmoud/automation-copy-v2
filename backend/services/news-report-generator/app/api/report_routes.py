@@ -377,7 +377,93 @@ async def trigger_report_generation(background_tasks: BackgroundTasks):
         "message": "Report generation started in background",
         "status": "processing"
     }
+@router.get("/reports/{report_id}/images")
+async def get_report_images(report_id: int):
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
 
+        query = """
+            SELECT rn.id, rn.title, rn.content_img
+            FROM generated_report gr
+            JOIN news_cluster_members ncm ON gr.cluster_id = ncm.cluster_id
+            JOIN raw_news rn ON ncm.news_id = rn.id
+            WHERE gr.id = %s AND rn.content_img IS NOT NULL
+        """
+
+        cursor.execute(query, (report_id,))
+        rows = cursor.fetchall()
+        images = [{"news_id": r[0], "title": r[1], "img_url": r[2]} for r in rows]
+
+        cursor.close()
+        conn.close()
+        return {"report_id": report_id, "images": images}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/reports/{report_id}/{content_type_id}")
+def get_report_with_content(report_id: int, content_type_id: int):
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+
+        # ===== 1) Fetch Report =====
+        cur.execute("""
+            SELECT id, cluster_id, title, content, status, created_at, updated_at
+            FROM generated_report
+            WHERE id = %s
+        """, (report_id,))
+
+        report = cur.fetchone()
+
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        report_data = {
+            "id": report[0],
+            "cluster_id": report[1],
+            "title": report[2],
+            "content": report[3],
+            "status": report[4],
+            "created_at": report[5],
+            "updated_at": report[6]
+        }
+
+        # ===== 2) Fetch Generated Content =====
+        cur.execute("""
+            SELECT id, report_id, content_type_id, title, description, content, file_url, status, created_at
+            FROM generated_content
+            WHERE report_id = %s AND content_type_id = %s
+            ORDER BY created_at DESC
+        """, (report_id, content_type_id))
+
+        contents = cur.fetchall()
+
+        generated_list = []
+        for row in contents:
+            generated_list.append({
+                "id": row[0],
+                "report_id": row[1],
+                "content_type_id": row[2],
+                "title": row[3],
+                "description": row[4],
+                "content": row[5],
+                "file_url": row[6],
+                "status": row[7],
+                "created_at": row[8]
+            })
+
+        cur.close()
+        conn.close()
+
+        return {
+            "report": report_data,
+            "generated_content": generated_list
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/stats/overview")
 async def get_report_stats():
