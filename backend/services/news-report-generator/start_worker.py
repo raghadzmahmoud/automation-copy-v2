@@ -63,10 +63,10 @@ def main():
     logger.info("=" * 60)
     
     # Schedule jobs
-    schedule.every(2).minutes.do(run_scraper)
-    schedule.every(3).minutes.do(run_clustering)
-    schedule.every(3).minutes.do(run_reports)
-    schedule.every(3).minutes.do(run_social_media) 
+    schedule.every(10).minutes.do(run_scraper)
+    schedule.every(1).hours.do(run_clustering)
+    schedule.every(1).hours.do(run_reports)
+    schedule.every(1).hours.do(run_social_media) 
     
     # Run initial scraper
     logger.info("Running initial scraper...")
