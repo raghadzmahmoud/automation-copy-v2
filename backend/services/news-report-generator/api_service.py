@@ -26,7 +26,9 @@ from app.api import (
     content_routes,     
     avatar_routes,    
     config_routes,      
-    task_routes     
+    task_routes,
+    social_media_routes,
+    image_routes  # ← NEW
 )
 
 # Setup logging
@@ -41,7 +43,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="AI Media Center API",
     description="Automated news aggregation and report generation system",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 # CORS middleware
@@ -71,9 +73,16 @@ async def shutdown_event():
 async def root():
     return {
         "message": "AI Media Center API",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "running",
         "mode": "api_only",
+        "features": [
+            "news_scraping",
+            "clustering",
+            "report_generation",
+            "social_media_content",
+            "image_generation"  # ← NEW
+        ],
         "docs": "/docs",
         "timestamp": datetime.now().isoformat()
     }
@@ -120,6 +129,8 @@ app.include_router(content_routes.router, prefix="/api/v1/content", tags=["Gener
 app.include_router(avatar_routes.router, prefix="/api/v1/avatars", tags=["Avatars & Voices"])
 app.include_router(config_routes.router, prefix="/api/v1/config", tags=["Configuration"])
 app.include_router(task_routes.router, prefix="/api/v1/tasks", tags=["Scheduled Tasks"])
+app.include_router(social_media_routes.router, prefix="/api/v1/social-media", tags=["Social Media"])
+app.include_router(image_routes.router, prefix="/api/v1/images", tags=["Image Generation"])  # ← NEW
 
 
 if __name__ == "__main__":

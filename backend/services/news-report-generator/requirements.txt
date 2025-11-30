@@ -15,7 +15,6 @@ google-genai
 # Core Dependencies
 python-dotenv==1.0.0
 
-
 # Database
 psycopg2-binary==2.9.9
 
@@ -23,6 +22,8 @@ psycopg2-binary==2.9.9
 schedule==1.2.1
 apscheduler
 
-
 # Utilities
 python-dateutil==2.8.2
+
+# AWS S3
+boto3==1.34.0
