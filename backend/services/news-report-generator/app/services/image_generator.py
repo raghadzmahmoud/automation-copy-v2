@@ -1,25 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-🎨 Image Generator Service - Final Fixed Version
-توليد صور للتقارير ورفعها على S3 في folder image/
+🎨 Image Generator Service - FINAL WORKING VERSION ✅
+Based on actual Gemini API response structure
+Response has 2 parts: [text_part, image_part]
+Image is in: response.parts[1].inline_data.data
 """
 
 import os
 import sys
 import time
 import io
+import base64
 import psycopg2
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 import boto3
-from botocore.exceptions import ClientError
 
 from settings import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, DB_CONFIG
 
 try:
     from google import genai
+    from google.genai.types import GenerateContentConfig, Modality
     from PIL import Image
 except ImportError:
     print("❌ Required packages not installed.")
@@ -226,24 +229,24 @@ class ImageGenerator:
         keywords = self._extract_keywords(title, content)
         keywords_str = "، ".join(keywords[:5])
         
-        prompt = f"""أنشئ صورة إخبارية احترافية واقعية تُمثل هذا الخبر:
+        prompt = f"""Create a professional, realistic news image that represents this news story:
 
-العنوان: {title}
+Title: {title}
 
-الموضوع: {keywords_str}
+Topic: {keywords_str}
 
-المتطلبات:
-- صورة واقعية عالية الجودة
-- أسلوب صحافة احترافية
-- مناسبة للبث الإخباري
-- بدون نصوص أو علامات مائية
-- بدون وجوه أشخاص محددين
-- تركيب متوازن وجذاب
-- إضاءة احترافية
-- دقة عالية مناسبة للنشر
+Requirements:
+- Realistic, high-quality image
+- Professional journalism style
+- Suitable for news broadcast
+- No text or watermarks
+- No specific identifiable faces
+- Balanced and attractive composition
+- Professional lighting
+- High resolution suitable for publishing
 
-الحجم: أفقي (16:9)
-الأسلوب: تصوير صحفي واقعي
+Size: Horizontal (16:9)
+Style: Realistic photojournalism
 """
         return prompt
     
@@ -274,85 +277,149 @@ class ImageGenerator:
         
         return unique_keywords
     
-    def _generate_and_upload_image(self, prompt: str, report_id: int, retries: int = 3) -> ImageGenerationResult:
+    def _generate_and_upload_image(
+        self, 
+        prompt: str, 
+        report_id: int, 
+        retries: int = 3
+    ) -> ImageGenerationResult:
         """
-        ✅ توليد الصورة ورفعها مباشرة على S3
-        في folder image/ بدون ACL
+        ✅✅✅ FINAL WORKING VERSION
+        Based on actual Gemini response structure:
+        - response.parts is a list with 2 items
+        - parts[0] = text description
+        - parts[1] = inline_data with image
         """
         for attempt in range(retries):
             try:
                 print(f"   🎨 Generating image (attempt {attempt + 1}/{retries})...")
                 
-                # استدعاء Gemini
-                response = self.gemini_client.models.generate_content(
-                    model=self.image_model,
-                    contents=[prompt]
+                # ✅ Config with response_modalities
+                config = GenerateContentConfig(
+                    response_modalities=[Modality.TEXT, Modality.IMAGE]
                 )
                 
-                # استخراج البيانات
-                image_bytes = None
+                # ✅ Call Gemini API
+                response = self.gemini_client.models.generate_content(
+                    model=self.image_model,
+                    contents=[prompt],
+                    config=config
+                )
                 
-                for part in response.parts:
-                    if part.text is not None:
-                        print(f"   ℹ️  Response text: {part.text[:100]}")
-                    
-                    elif part.inline_data is not None:
-                        try:
-                            # ✅ الطريقة 1: استخدام as_image()
-                            pil_image = part.as_image()
-                            if pil_image:
-                                # ✅ حفظ في BytesIO بدون format= keyword
-                                buffer = io.BytesIO()
-                                pil_image.save(buffer, "PNG")  # PNG كـ format string عادي
-                                buffer.seek(0)  # العودة لبداية الـ buffer
-                                image_bytes = buffer.getvalue()
-                                print(f"   ✅ Image extracted using as_image()")
-                                break
-                        except Exception as e:
-                            print(f"   ⚠️  as_image() failed: {e}")
-                            
-                            # ✅ الطريقة 2: البيانات الخام مباشرة
-                            try:
-                                image_bytes = part.inline_data.data
-                                print(f"   ✅ Image extracted as raw bytes")
-                                break
-                            except Exception as e2:
-                                print(f"   ⚠️  Raw extraction failed: {e2}")
+                print(f"   ✅ Response received")
                 
-                # ✅ رفع على S3 مباشرة
-                if image_bytes:
-                    timestamp = int(time.time())
-                    file_name = f"report_{report_id}_{timestamp}.png"
-                    s3_key = f"{self.s3_folder}{file_name}"  # image/report_9_1234567890.png
+                # ✅ CRITICAL FIX: Loop through ALL parts
+                # Response structure:
+                # parts[0] = text: "Here's a professional..."
+                # parts[1] = inline_data: {mime_type, data}
+                
+                image_data_raw = None
+                text_response = None
+                
+                if not hasattr(response, 'parts') or not response.parts:
+                    raise ValueError("Response has no parts")
+                
+                print(f"   📦 Response has {len(response.parts)} parts")
+                
+                for i, part in enumerate(response.parts):
+                    print(f"   📦 Checking part #{i+1}...")
                     
-                    print(f"   📤 Uploading to S3: {s3_key}")
+                    # Check for text
+                    if hasattr(part, 'text') and part.text:
+                        text_response = part.text
+                        print(f"      ✅ Text: {text_response[:60]}...")
                     
-                    # ✅ رفع بدون ACL (حل مشكلة AccessControlListNotSupported)
-                    self.s3_client.put_object(
-                        Bucket=self.bucket_name,
-                        Key=s3_key,
-                        Body=image_bytes,
-                        ContentType='image/png'
-                        # ❌ بدون ACL='public-read' - السبب: الـ bucket ما بيسمح ACLs
-                    )
+                    # ✅ Check for inline_data (THIS IS THE IMAGE!)
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        print(f"      ✅✅✅ Found inline_data!")
+                        
+                        if hasattr(part.inline_data, 'mime_type'):
+                            mime_type = part.inline_data.mime_type
+                            print(f"         📄 MIME type: {mime_type}")
+                        
+                        if hasattr(part.inline_data, 'data') and part.inline_data.data:
+                            image_data_raw = part.inline_data.data
+                            data_size = len(image_data_raw)
+                            print(f"         📏 Data size: {data_size:,} bytes")
+                            print(f"         🎉 IMAGE DATA FOUND!")
+                            break  # Found the image, stop searching
+                
+                # ✅ Check if we found image data
+                if not image_data_raw:
+                    raise ValueError("No image data found in response parts")
+                
+                print(f"   ✅ Image data extracted ({len(image_data_raw):,} bytes)")
+                
+                # ✅✅✅ CRITICAL FIX: Data is BASE64 encoded!
+                # The data looks like: b'iVBORw0KGgo...' which is base64, not raw PNG
+                print(f"   🔄 Converting from Base64 to PNG...")
+                
+                import base64
+                
+                try:
+                    # First, check if data is already bytes (raw PNG) or base64 string
+                    # PNG signature: starts with \x89PNG\r\n\x1a\n
+                    if image_data_raw[:8] == b'\x89PNG\r\n\x1a\n':
+                        # Already raw PNG bytes
+                        print(f"      ℹ️  Data is raw PNG bytes")
+                        decoded_data = image_data_raw
+                    else:
+                        # It's base64 encoded - need to decode
+                        print(f"      🔍 Detected Base64 encoding")
+                        print(f"         First 50 chars: {image_data_raw[:50]}")
+                        
+                        # Decode from base64
+                        decoded_data = base64.b64decode(image_data_raw)
+                        print(f"      ✅ Base64 decoded ({len(decoded_data):,} bytes)")
                     
-                    # ✅ بناء الـ URL العام
-                    s3_url = f"https://{self.bucket_name}.s3.amazonaws.com/{s3_key}"
-                    print(f"   ✅ Uploaded successfully: {s3_url}")
+                    # Now open with PIL
+                    temp_image = Image.open(io.BytesIO(decoded_data))
                     
-                    return ImageGenerationResult(
-                        success=True,
-                        image_url=s3_url,
-                        prompt_used=prompt
-                    )
-                else:
-                    raise ValueError("No image data in response")
+                    print(f"      ✅ PIL opened image successfully")
+                    print(f"         Size: {temp_image.size}")
+                    print(f"         Format: {temp_image.format}")
+                    print(f"         Mode: {temp_image.mode}")
+                    
+                    # Convert to PNG using Stack Overflow method
+                    byteImgIO = io.BytesIO()
+                    temp_image.save(byteImgIO, "PNG")
+                    byteImgIO.seek(0)
+                    image_bytes = byteImgIO.read()
+                    
+                    print(f"      ✅ Converted to PNG ({len(image_bytes):,} bytes)")
+                    
+                except Exception as e:
+                    print(f"      ❌ Processing failed: {e}")
+                    raise ValueError(f"Cannot process image data: {e}")
+                
+                # ✅ Upload to S3
+                timestamp = int(time.time())
+                file_name = f"report_{report_id}_{timestamp}.png"
+                s3_key = f"{self.s3_folder}{file_name}"
+                
+                print(f"   📤 Uploading to S3: {s3_key}")
+                
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=s3_key,
+                    Body=image_bytes,
+                    ContentType='image/png'
+                )
+                
+                s3_url = f"https://{self.bucket_name}.s3.amazonaws.com/{s3_key}"
+                print(f"   ✅ Uploaded successfully: {s3_url}")
+                
+                return ImageGenerationResult(
+                    success=True,
+                    image_url=s3_url,
+                    prompt_used=prompt
+                )
                 
             except Exception as e:
                 error_msg = str(e)
-                print(f"   ⚠️  Error: {error_msg[:200]}")
+                print(f"   ⚠️  Error: {error_msg[:300]}")
                 
-                # فحص rate limit
+                # Check for rate limit
                 if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
                     if attempt < retries - 1:
                         wait_time = 60
@@ -365,7 +432,7 @@ class ImageGenerator:
                             error_message="Rate limit exceeded. Please try again later."
                         )
                 
-                # أخطاء أخرى
+                # Other errors
                 if attempt < retries - 1:
                     print(f"   🔄 Retrying in 10 seconds...")
                     time.sleep(10)
@@ -530,7 +597,13 @@ class ImageGenerator:
             self.conn.rollback()
             return False
     
-    def _update_image_record(self, content_id: int, report_id: int, s3_url: str, prompt: str) -> bool:
+    def _update_image_record(
+        self, 
+        content_id: int, 
+        report_id: int, 
+        s3_url: str, 
+        prompt: str
+    ) -> bool:
         """تحديث سجل الصورة"""
         try:
             self.cursor.execute("""
