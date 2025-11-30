@@ -72,17 +72,19 @@ def generate_images():
     logger.info("=" * 60)
     logger.info(f"Starting image generation at {start_time}")
     
+    generator = None
+    
     try:
         from app.services.image_generator import ImageGenerator
         
         generator = ImageGenerator()
         
-        logger.info(f"Processing limit: 10 reports")
+        logger.info(f"Processing limit: 25 reports per run")
         
-        # توليد الصور
+        # توليد الصور (25 صور كل ساعة لتجنب rate limits)
         stats = generator.generate_for_all_reports(
             force_update=False,
-            limit=10
+            limit=25  # ← 25 صور فقط لتجنب quota issues
         )
         
         # Log completion
@@ -100,8 +102,6 @@ def generate_images():
         
         log_task_execution('completed', total_processed)
         
-        generator.close()
-        
     except Exception as e:
         logger.error(f"Fatal error in image generation: {e}")
         import traceback
@@ -109,6 +109,11 @@ def generate_images():
         log_task_execution('failed', 0, str(e))
     
     finally:
+        if generator:
+            try:
+                generator.close()
+            except:
+                pass
         logger.info("=" * 60)
 
 
