@@ -156,7 +156,7 @@ class ImageGenerator:
     def generate_for_all_reports(
         self,
         force_update: bool = False,
-        limit: int = 10
+        limit: int = 40
     ) -> Dict:
         """توليد صور لكل التقارير"""
         print(f"\n{'='*70}")
@@ -404,7 +404,7 @@ class ImageGenerator:
             print(f"   ❌ Error fetching report: {e}")
             return None
     
-    def _fetch_reports_without_images(self, limit: int = 10) -> List[Dict]:
+    def _fetch_reports_without_images(self, limit: int = 40) -> List[Dict]:
         """جلب التقارير بدون صور"""
         try:
             query = """
@@ -441,7 +441,7 @@ class ImageGenerator:
             print(f"   ❌ Error fetching reports: {e}")
             return []
     
-    def _fetch_recent_reports(self, limit: int = 10) -> List[Dict]:
+    def _fetch_recent_reports(self, limit: int = 40) -> List[Dict]:
         """جلب التقارير الأخيرة"""
         try:
             query = """
