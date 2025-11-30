@@ -73,7 +73,7 @@ def main():
     schedule.every(1).hours.do(run_clustering)
     schedule.every(1).hours.do(run_reports)
     schedule.every(1).hours.do(run_social_media)
-    schedule.every(5).minutes.do(run_image_generation)
+    schedule.every(1).minutes.do(run_image_generation)
     
     # Run initial scraper
     logger.info("Running initial scraper...")
