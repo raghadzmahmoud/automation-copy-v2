@@ -25,6 +25,8 @@ class ReportItem(BaseModel):
     content: str
     status: str
     source_news_count: int
+    category_id: Optional[int] = None
+    category_name: Optional[str] = None
     published_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
@@ -36,6 +38,8 @@ class ReportListItem(BaseModel):
     title: str
     status: str
     source_news_count: int
+    category_id: Optional[int] = None
+    category_name: Optional[str] = None
     created_at: datetime
 
 
@@ -69,28 +73,58 @@ def get_db():
 async def list_reports(
     limit: int = Query(20, ge=-1, le=10000),
     offset: int = Query(0, ge=0),
-    status: Optional[str] = None
+    status: Optional[str] = None,
+    category_id: Optional[int] = None,
+    source_id: Optional[int] = None
 ):
-    """Get list of reports (full details like single report)"""
+    """
+    Get list of reports with optional filters
+    
+    Filters:
+    - status: Filter by report status (draft, published, archived)
+    - category_id: Filter by category ID
+    - source_id: Filter reports that contain news from specific source
+    """
     try:
         conn = get_db()
         cursor = conn.cursor()
 
         query = """
-            SELECT 
-                id, cluster_id, title, content, status,
-                source_news_count, published_at,
-                created_at, updated_at
-            FROM generated_report
-            WHERE 1=1
+            SELECT DISTINCT
+                gr.id, gr.cluster_id, gr.title, gr.content, gr.status,
+                gr.source_news_count, nc.category_id, c.name as category_name,
+                gr.published_at, gr.created_at, gr.updated_at
+            FROM generated_report gr
+            LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
+            LEFT JOIN categories c ON nc.category_id = c.id
         """
+        
+        # Add source filter if needed
+        if source_id is not None:
+            query += """
+            LEFT JOIN news_cluster_members ncm ON gr.cluster_id = ncm.cluster_id
+            LEFT JOIN raw_news rn ON ncm.news_id = rn.id
+            """
+        
+        query += " WHERE 1=1"
         params = []
 
+        # Status filter
         if status:
-            query += " AND status = %s"
+            query += " AND gr.status = %s"
             params.append(status)
 
-        query += " ORDER BY created_at DESC"
+        # Category filter
+        if category_id is not None:
+            query += " AND nc.category_id = %s"
+            params.append(category_id)
+        
+        # Source filter
+        if source_id is not None:
+            query += " AND rn.source_id = %s"
+            params.append(source_id)
+
+        query += " ORDER BY gr.created_at DESC"
 
         if limit != -1:
             query += " LIMIT %s OFFSET %s"
@@ -108,9 +142,11 @@ async def list_reports(
                 content=row[3],
                 status=row[4],
                 source_news_count=row[5],
-                published_at=row[6],
-                created_at=row[7],
-                updated_at=row[8],
+                category_id=row[6],
+                category_name=row[7],
+                published_at=row[8],
+                created_at=row[9],
+                updated_at=row[10],
             ))
 
         cursor.close()
@@ -121,6 +157,7 @@ async def list_reports(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/{report_id}", response_model=ReportItem)
 async def get_report(report_id: int):
     """Get single report by ID"""
@@ -130,10 +167,13 @@ async def get_report(report_id: int):
         
         cursor.execute("""
             SELECT 
-                id, cluster_id, title, content, status,
-                source_news_count, published_at, created_at, updated_at
-            FROM generated_report
-            WHERE id = %s
+                gr.id, gr.cluster_id, gr.title, gr.content, gr.status,
+                gr.source_news_count, nc.category_id, c.name as category_name,
+                gr.published_at, gr.created_at, gr.updated_at
+            FROM generated_report gr
+            LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
+            LEFT JOIN categories c ON nc.category_id = c.id
+            WHERE gr.id = %s
         """, (report_id,))
         
         row = cursor.fetchone()
@@ -148,9 +188,11 @@ async def get_report(report_id: int):
             content=row[3],
             status=row[4],
             source_news_count=row[5],
-            published_at=row[6],
-            created_at=row[7],
-            updated_at=row[8]
+            category_id=row[6],
+            category_name=row[7],
+            published_at=row[8],
+            created_at=row[9],
+            updated_at=row[10]
         )
         
         cursor.close()
@@ -173,10 +215,13 @@ async def get_report_by_cluster(cluster_id: int):
         
         cursor.execute("""
             SELECT 
-                id, cluster_id, title, content, status,
-                source_news_count, published_at, created_at, updated_at
-            FROM generated_report
-            WHERE cluster_id = %s
+                gr.id, gr.cluster_id, gr.title, gr.content, gr.status,
+                gr.source_news_count, nc.category_id, c.name as category_name,
+                gr.published_at, gr.created_at, gr.updated_at
+            FROM generated_report gr
+            LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
+            LEFT JOIN categories c ON nc.category_id = c.id
+            WHERE gr.cluster_id = %s
         """, (cluster_id,))
         
         row = cursor.fetchone()
@@ -191,9 +236,11 @@ async def get_report_by_cluster(cluster_id: int):
             content=row[3],
             status=row[4],
             source_news_count=row[5],
-            published_at=row[6],
-            created_at=row[7],
-            updated_at=row[8]
+            category_id=row[6],
+            category_name=row[7],
+            published_at=row[8],
+            created_at=row[9],
+            updated_at=row[10]
         )
         
         cursor.close()
@@ -207,74 +254,76 @@ async def get_report_by_cluster(cluster_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def list_reports(limit: int = 20, offset: int = 0, status: Optional[str] = None) -> List[ReportListItem]:
-    """Helper to list reports with optional status filtering."""
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-
-        query = """
-            SELECT id, cluster_id, title, status, source_news_count, created_at
-            FROM generated_report
-            WHERE 1=1
-        """
-        params = []
-
-        if status:
-            query += " AND status = %s"
-            params.append(status)
-
-        query += " ORDER BY created_at DESC"
-
-        # apply limit/offset if provided (limit of -1 or None will return all)
-        if limit is not None and limit != -1:
-            query += " LIMIT %s OFFSET %s"
-            params.extend([limit, offset])
-
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-
-        results: List[ReportListItem] = []
-        for row in rows:
-            results.append(ReportListItem(
-                id=row[0],
-                cluster_id=row[1],
-                title=row[2],
-                status=row[3],
-                source_news_count=row[4],
-                created_at=row[5]
-            ))
-
-        cursor.close()
-        conn.close()
-        return results
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/by-category/{category_id}", response_model=List[ReportItem])
+async def get_reports_by_category(
+    category_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = None
+):
+    """Get reports filtered by category"""
+    return await list_reports(
+        limit=limit,
+        offset=offset,
+        status=status,
+        category_id=category_id
+    )
 
 
-@router.get("/recent/", response_model=List[ReportListItem])
+@router.get("/by-source/{source_id}", response_model=List[ReportItem])
+async def get_reports_by_source(
+    source_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = None
+):
+    """Get reports that contain news from specific source"""
+    return await list_reports(
+        limit=limit,
+        offset=offset,
+        status=status,
+        source_id=source_id
+    )
+
+
+@router.get("/recent/", response_model=List[ReportItem])
 async def get_recent_reports(limit: int = Query(10, ge=1, le=50)):
     """Get most recent reports"""
     return await list_reports(limit=limit, offset=0)
 
 
-@router.get("/published/", response_model=List[ReportListItem])
+@router.get("/published/", response_model=List[ReportItem])
 async def get_published_reports(
     limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    category_id: Optional[int] = None,
+    source_id: Optional[int] = None
 ):
-    """Get published reports only"""
-    return await list_reports(limit=limit, offset=offset, status="published")
+    """Get published reports with optional filters"""
+    return await list_reports(
+        limit=limit,
+        offset=offset,
+        status="published",
+        category_id=category_id,
+        source_id=source_id
+    )
 
 
-@router.get("/drafts/", response_model=List[ReportListItem])
+@router.get("/drafts/", response_model=List[ReportItem])
 async def get_draft_reports(
     limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    category_id: Optional[int] = None,
+    source_id: Optional[int] = None
 ):
-    """Get draft reports only"""
-    return await list_reports(limit=limit, offset=offset, status="draft")
+    """Get draft reports with optional filters"""
+    return await list_reports(
+        limit=limit,
+        offset=offset,
+        status="draft",
+        category_id=category_id,
+        source_id=source_id
+    )
 
 
 @router.patch("/{report_id}/publish")
@@ -377,8 +426,11 @@ async def trigger_report_generation(background_tasks: BackgroundTasks):
         "message": "Report generation started in background",
         "status": "processing"
     }
+
+
 @router.get("/reports/{report_id}/raw-news-images")
 async def get_report_images(report_id: int):
+    """Get all images from raw news in this report"""
     try:
         conn = get_db()
         cursor = conn.cursor()
@@ -401,14 +453,16 @@ async def get_report_images(report_id: int):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
     
 @router.get("/reports/{report_id}/{content_type_id}")
 def get_report_with_content(report_id: int, content_type_id: int):
+    """Get report with its generated content by type"""
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cur = conn.cursor()
 
-        # ===== 1) Fetch Report =====
+        # Fetch Report
         cur.execute("""
             SELECT id, cluster_id, title, content, status, created_at, updated_at
             FROM generated_report
@@ -430,7 +484,7 @@ def get_report_with_content(report_id: int, content_type_id: int):
             "updated_at": report[6]
         }
 
-        # ===== 2) Fetch Generated Content =====
+        # Fetch Generated Content
         cur.execute("""
             SELECT id, report_id, content_type_id, title, description, content, file_url, status, created_at
             FROM generated_content
@@ -465,6 +519,7 @@ def get_report_with_content(report_id: int, content_type_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/stats/overview")
 async def get_report_stats():
     """Get report statistics"""
@@ -483,6 +538,18 @@ async def get_report_stats():
             GROUP BY status
         """)
         by_status = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # By category
+        cursor.execute("""
+            SELECT c.name, COUNT(gr.id)
+            FROM generated_report gr
+            LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
+            LEFT JOIN categories c ON nc.category_id = c.id
+            WHERE c.name IS NOT NULL
+            GROUP BY c.name
+            ORDER BY COUNT(gr.id) DESC
+        """)
+        by_category = {row[0]: row[1] for row in cursor.fetchall()}
         
         # Today's reports
         cursor.execute("""
@@ -505,6 +572,7 @@ async def get_report_stats():
             "total_reports": total,
             "today_reports": today,
             "by_status": by_status,
+            "by_category": by_category,
             "avg_word_count": avg_words
         }
         
