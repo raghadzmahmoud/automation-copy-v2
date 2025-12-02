@@ -87,7 +87,7 @@ def generate_audio():
         # ⚠️ This exceeds free tier - will cost ~$85/month
         stats = generator.generate_for_all_reports(
             force_update=False,
-            limit=4  # ← 10 تقارير كل ساعة
+            limit=4  
         )
         
         # Log completion
