@@ -16,3 +16,5 @@ env/
 
 # Logs
 *.log
+*.json
+n8nraghad-*.json

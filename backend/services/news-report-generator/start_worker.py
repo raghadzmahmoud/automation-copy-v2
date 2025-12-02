@@ -55,25 +55,30 @@ def run_image_generation():
     """Image generation job - every hour"""
     from cron.image_generation_job import generate_images
     safe_run(generate_images, "Image Generation Job")
+    
+def run_audio_generation():
+    """Audio generation job - every hour"""
+    from cron.audio_generation_job import generate_audio
+    safe_run(generate_audio, "Audio Generation Job")
+
 
 def main():
-    logger.info("=" * 60)
-    logger.info("⏰ Background Worker Started")
-    logger.info("=" * 60)
     logger.info("Jobs Schedule:")
-    logger.info("  • Scraper:         Every 10 minutes")
-    logger.info("  • Clustering:      Every 1 hour")
-    logger.info("  • Reports:         Every 1 hour")
-    logger.info("  • Social Media:    Every 1 hour")
+    logger.info("  • Scraper:          Every 10 minutes")
+    logger.info("  • Clustering:       Every 1 hour")
+    logger.info("  • Reports:          Every 1 hour")
+    logger.info("  • Social Media:     Every 1 hour")
     logger.info("  • Image Generation: Every 1 hour")
+    logger.info("  • Audio Generation: Every 1 hour")  # ← إضافة هذا السطر
     logger.info("=" * 60)
     
     # Schedule jobs
-    schedule.every(10).minutes.do(run_scraper)
+    schedule.every(50).minutes.do(run_scraper)
     schedule.every(1).hours.do(run_clustering)
     schedule.every(1).hours.do(run_reports)
     schedule.every(1).hours.do(run_social_media)
     schedule.every(1).hours.do(run_image_generation)
+    schedule.every(2).minutes.do(run_audio_generation)  # ← إضافة هذا السطر
     
     # Run initial scraper
     logger.info("Running initial scraper...")

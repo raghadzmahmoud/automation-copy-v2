@@ -28,7 +28,8 @@ from app.api import (
     config_routes,      
     task_routes,
     social_media_routes,
-    image_routes  # ← NEW
+    image_routes,
+    audio_routes  
 )
 
 # Setup logging
@@ -131,6 +132,7 @@ app.include_router(config_routes.router, prefix="/api/v1/config", tags=["Configu
 app.include_router(task_routes.router, prefix="/api/v1/tasks", tags=["Scheduled Tasks"])
 app.include_router(social_media_routes.router, prefix="/api/v1/social-media", tags=["Social Media"])
 app.include_router(image_routes.router, prefix="/api/v1/images", tags=["Image Generation"])  # ← NEW
+app.include_router(audio_routes.router, prefix="/api/v1/audio", tags=["Audio Generation"])
 
 
 if __name__ == "__main__":
