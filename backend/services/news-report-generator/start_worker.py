@@ -76,7 +76,7 @@ def main():
     schedule.every(10).minutes.do(run_scraper)
     schedule.every(1).hours.do(run_clustering)
     schedule.every(1).hours.do(run_reports)
-    schedule.every(1).hours.do(run_social_media)
+    schedule.every(30).minutes.do(run_social_media)
     schedule.every(1).hours.do(run_image_generation)
     schedule.every(1).hours.do(run_audio_generation)  # ← إضافة هذا السطر
     
