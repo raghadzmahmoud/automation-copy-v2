@@ -50,11 +50,18 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://ghazimortaja.com"],
+    allow_origins=[
+        "https://ghazimortaja.com",
+        "http://ghazimortaja.com",
+       
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
+
 
 
 @app.on_event("startup")
