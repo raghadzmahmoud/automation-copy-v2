@@ -177,7 +177,7 @@ def scrape_news():
             name = source[1]
             source_type_id = source[2]
             url = source[3]
-            source_type_name = source[6] or 'rss'  # default to 'rss'
+            source_type_name = source[6]  
             language_id = 1  # default Arabic
             
             try:
@@ -188,10 +188,6 @@ def scrape_news():
                 
                 if normalized_source_type == 'rss':
                     news_items = scraper.scrape_rss(url, source_id, language_id)
-                elif normalized_source_type == 'html':
-                    news_items = scraper.scrape_html(url, source_id, language_id)
-                elif normalized_source_type == 'api':
-                    news_items = scraper.scrape_api(url, source_id, language_id)
                 else:
                     logger.warning(f"Unknown source type: {source_type_name}")
                     continue
