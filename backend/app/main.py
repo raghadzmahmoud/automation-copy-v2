@@ -42,10 +42,16 @@ app = FastAPI(
 # ============================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://ghazimortaja.com",
+        "http://ghazimortaja.com",
+       
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 

@@ -51,64 +51,84 @@ class SocialMediaContent:
 
 
 class SocialMediaParser:
-    """محلل نصوص السوشيال ميديا"""
+    """✅ محلل محسّن - يستخرج 3 منصات من رد واحد"""
     
     @staticmethod
-    def parse(text: str, platform: str) -> Optional[SocialMediaContent]:
-        """استخراج المحتوى من النص"""
-        text = text.strip()
+    def parse_multi_platform(text: str) -> Optional[Dict[str, SocialMediaContent]]:
+        """
+        استخراج محتوى 3 منصات من نص واحد
+        Returns: {'facebook': SocialMediaContent, 'twitter': ..., 'instagram': ...}
+        """
+        result = {}
         
-        result = SocialMediaParser._parse_with_markers(text, platform)
-        if result:
-            return result
+        # البحث عن كل منصة
+        platforms = ['facebook', 'twitter', 'instagram']
         
-        result = SocialMediaParser._parse_simple(text, platform)
-        if result:
+        for platform in platforms:
+            # Pattern: [FACEBOOK] العنوان: ... المحتوى: ...
+            pattern = rf'\[{platform.upper()}\](.*?)(?=\[(?:FACEBOOK|TWITTER|INSTAGRAM)\]|$)'
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            
+            if match:
+                section = match.group(1).strip()
+                content_obj = SocialMediaParser._extract_from_section(section, platform)
+                if content_obj:
+                    result[platform] = content_obj
+        
+        # يجب أن نحصل على 3 منصات بالضبط
+        if len(result) == 3:
             return result
         
         return None
     
     @staticmethod
-    def _parse_with_markers(text: str, platform: str) -> Optional[SocialMediaContent]:
-        """البحث عن markers"""
-        patterns = [
-            (r'\[العنوان\][:\s]*(.+?)(?=\[المحتوى\])', r'\[المحتوى\][:\s]*(.+)'),
-            (r'العنوان[:\s]+(.+?)(?=المحتوى[:\s])', r'المحتوى[:\s]+(.+)'),
-            (r'Title[:\s]+(.+?)(?=Content[:\s])', r'Content[:\s]+(.+)'),
+    def _extract_from_section(section: str, platform: str) -> Optional[SocialMediaContent]:
+        """استخراج العنوان والمحتوى من قسم واحد"""
+        
+        # البحث عن العنوان
+        title_patterns = [
+            r'العنوان[:\s]+(.+?)(?=المحتوى|$)',
+            r'Title[:\s]+(.+?)(?=Content|المحتوى|$)',
+            r'\*\*العنوان\*\*[:\s]+(.+?)(?=\*\*المحتوى|المحتوى|$)',
         ]
         
-        for title_pattern, content_pattern in patterns:
-            title_match = re.search(title_pattern, text, re.DOTALL | re.IGNORECASE)
-            content_match = re.search(content_pattern, text, re.DOTALL | re.IGNORECASE)
-            
-            if title_match and content_match:
-                title = SocialMediaParser._clean(title_match.group(1))
-                content = SocialMediaParser._clean(content_match.group(1))
-                
-                if title and content:
-                    return SocialMediaContent(
-                        title=title,
-                        content=content,
-                        platform=platform
-                    )
+        title = None
+        for pattern in title_patterns:
+            match = re.search(pattern, section, re.DOTALL | re.IGNORECASE)
+            if match:
+                title = SocialMediaParser._clean_text(match.group(1))
+                if title and len(title) > 5:
+                    break
         
-        return None
-    
-    @staticmethod
-    def _parse_simple(text: str, platform: str) -> Optional[SocialMediaContent]:
-        """استخراج بسيط"""
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if not title:
+            # Fallback: أول سطر
+            lines = [l.strip() for l in section.split('\n') if l.strip()]
+            if lines:
+                title = SocialMediaParser._clean_text(lines[0])
         
-        if len(lines) < 2:
-            return None
+        # البحث عن المحتوى
+        content_patterns = [
+            r'المحتوى[:\s]+(.+)',
+            r'Content[:\s]+(.+)',
+            r'\*\*المحتوى\*\*[:\s]+(.+)',
+        ]
         
-        title = lines[0]
-        title = re.sub(r'^\*+|\*+$|^#+\s*|^[""]|[""]$', '', title).strip()
+        content = None
+        for pattern in content_patterns:
+            match = re.search(pattern, section, re.DOTALL | re.IGNORECASE)
+            if match:
+                content = SocialMediaParser._clean_text(match.group(1))
+                if content and len(content) > 50:
+                    break
         
-        content = '\n'.join(lines[1:])
-        content = SocialMediaParser._clean(content)
+        if not content:
+            # Fallback: كل شيء بعد العنوان
+            lines = [l.strip() for l in section.split('\n') if l.strip()]
+            if len(lines) > 1:
+                content = '\n'.join(lines[1:])
+                content = SocialMediaParser._clean_text(content)
         
-        if title and content and len(title) > 5:
+        if title and content:
             return SocialMediaContent(
                 title=title,
                 content=content,
@@ -118,14 +138,21 @@ class SocialMediaParser:
         return None
     
     @staticmethod
-    def _clean(text: str) -> str:
+    def _clean_text(text: str) -> str:
         """تنظيف النص"""
         if not text:
             return ""
         
+        # إزالة markdown
         text = re.sub(r'\*\*|\*|__|_|```|`', '', text)
+        
+        # إزالة HTML
         text = re.sub(r'<[^>]+>', '', text)
+        
+        # إزالة JSON artifacts
         text = re.sub(r'[{}\[\]]', '', text)
+        
+        # تنظيف المسافات
         text = re.sub(r'\n{3,}', '\n\n', text)
         text = re.sub(r' {2,}', ' ', text)
         
@@ -183,7 +210,7 @@ class SocialMediaGenerator:
         platforms: List[str] = None,
         force_update: bool = False
     ) -> Dict:
-        """توليد محتوى سوشيال ميديا لتقرير واحد"""
+        """✅ توليد محتوى سوشيال ميديا لتقرير واحد"""
         print(f"\n{'='*70}")
         print(f"📱 Generating Social Media Content for Report #{report_id}")
         print(f"{'='*70}")
@@ -195,64 +222,46 @@ class SocialMediaGenerator:
         
         print(f"📰 Report: {report['title'][:50]}...")
         
-        if not platforms:
-            platforms = ['facebook', 'twitter', 'instagram']
-        
+        # فحص إذا في محتوى موجود
         existing_content = self._get_existing_content(report_id)
         
         if existing_content and not force_update:
             print(f"⏭️  Content already exists (ID: {existing_content['id']})")
             return {'success': True, 'skipped': True, 'content_id': existing_content['id']}
         
-        all_content = {}
-        failed_platforms = []
+        # ✅ توليد المحتوى (برومبت واحد → 3 منشورات)
+        all_content = self._generate_all_platforms(report)
         
-        for platform in platforms:
-            if platform not in self.platforms:
-                print(f"⚠️  Unknown platform: {platform}")
-                continue
-            
-            print(f"\n📱 Platform: {self.platforms[platform]['name']}")
-            
-            content = self._generate_for_platform(report, platform)
-            
-            if content:
-                all_content[platform] = content
-                print(f"   ✅ Generated")
-            else:
-                failed_platforms.append(platform)
-                print(f"   ❌ Failed")
-            
-            time.sleep(2)
+        if not all_content or len(all_content) != 3:
+            print("❌ Failed to generate content for all platforms")
+            return {'success': False, 'error': 'Generation failed'}
         
-        if all_content:
-            if existing_content:
-                success = self._update_combined_content(
-                    content_id=existing_content['id'],
-                    report_id=report_id,
-                    all_content=all_content
-                )
-                action = "Updated"
-            else:
-                success = self._save_combined_content(
-                    report_id=report_id,
-                    all_content=all_content
-                )
-                action = "Created"
-            
-            if success:
-                print(f"\n✅ {action} combined social media content")
-                return {
-                    'success': True,
-                    'action': action.lower(),
-                    'platforms_count': len(all_content),
-                    'failed_platforms': failed_platforms
-                }
-            else:
-                return {'success': False, 'error': f'Failed to {action.lower()}'}
+        print(f"✅ Generated content for {len(all_content)} platforms")
+        
+        # الحفظ
+        if existing_content:
+            success = self._update_combined_content(
+                content_id=existing_content['id'],
+                report_id=report_id,
+                all_content=all_content
+            )
+            action = "Updated"
         else:
-            print("\n❌ No content generated")
-            return {'success': False, 'error': 'No content generated'}
+            success = self._save_combined_content(
+                report_id=report_id,
+                all_content=all_content
+            )
+            action = "Created"
+        
+        if success:
+            print(f"\n✅ {action} combined social media content")
+            return {
+                'success': True,
+                'action': action.lower(),
+                'platforms_count': len(all_content)
+            }
+        else:
+            return {'success': False, 'error': f'Failed to {action.lower()}'}
     
     def generate_for_all_reports(
         self,
@@ -314,93 +323,105 @@ class SocialMediaGenerator:
         
         return total_stats
     
-    def _generate_for_platform(self, report: Dict, platform: str) -> Optional[SocialMediaContent]:
-        """توليد محتوى لمنصة واحدة"""
-        platform_info = self.platforms[platform]
-        prompt = self._create_prompt(report, platform_info)
-        content = self._call_gemini(prompt, platform)
-        return content
-    
-    def _create_prompt(self, report: Dict, platform_info: Dict) -> str:
-        return f"""أنت كاتب محتوى محترف لوسائل التواصل الاجتماعي.
-
-    المطلوب: اكتب منشور لـ {platform_info['name']} من التقرير التالي:
-
-    العنوان: {report['title']}
-    المحتوى: {report['content'][:1000]}...
-
-    ═══════════════════════════════════════
-    متطلبات المنشور:
-    ═══════════════════════════════════════
-
-    المنصة: {platform_info['name']}
-    الأسلوب: {platform_info['style']}
-    الطول: {platform_info['max_length']} حرف كحد أقصى
-    الهاشتاقات: {platform_info['hashtags']} هاشتاقات مناسبة
-
-    ═══════════════════════════════════════
-    الشكل المطلوب:
-    ═══════════════════════════════════════
-
-    [العنوان]
-    اكتب عنوان جذاب قصير (5-10 كلمات)
-
-    [المحتوى]
-    اكتب المنشور هنا:
-    - ابدأ بجملة افتتاحية قوية تشد الانتباه
-    - لخّص النقاط الرئيسية بوضوح
-    - استخدم أسلوب {platform_info['style']}
-    - أضف emojis مناسبة (2-3 فقط)
-    - اختم بـ call-to-action
-    - أضف {platform_info['hashtags']} هاشتاقات في النهاية.
-    - **مهم جدًا:** ضع "_" بين كل كلمة في الهشتاق، لا تستخدم الفراغات أو الحروف المدمجة. مثال: فلسطين_المحتلة
-    - كل هاشتاق يبدأ بـ #
-
-    الطول: {platform_info['max_length']} حرف كحد أقصى
-
-    الآن اكتب المنشور:
-    """
-
-    
-    def _call_gemini(self, prompt: str, platform: str, retries: int = 3) -> Optional[SocialMediaContent]:
-        """استدعاء Gemini"""
-        for attempt in range(retries):
+    def _generate_all_platforms(self, report: Dict) -> Optional[Dict[str, SocialMediaContent]]:
+        """✅ توليد محتوى لـ 3 منصات من برومبت واحد"""
+        prompt = self._create_multi_platform_prompt(report)
+        
+        for attempt in range(3):
             try:
                 response = self.client.models.generate_content(
                     model=GEMINI_MODEL,
                     contents=prompt,
                     config={
                         'temperature': 0.8,
-                        'max_output_tokens': 1024
+                        'max_output_tokens': 2048
                     }
                 )
                 
                 result_text = response.text.strip()
-                content = self.parser.parse(result_text, platform)
                 
-                if not content:
-                    print(f"   ⚠️  Could not parse, attempt {attempt + 1}/{retries}")
+                # استخراج المحتوى
+                all_content = self.parser.parse_multi_platform(result_text)
+                
+                if not all_content:
+                    print(f"   ⚠️  Could not parse, attempt {attempt + 1}/3")
                     time.sleep(2)
                     continue
                 
-                is_valid, reason = content.is_valid()
+                # التحقق من الصحة
+                all_valid = True
+                for platform, content in all_content.items():
+                    is_valid, reason = content.is_valid()
+                    if not is_valid:
+                        print(f"   ⚠️  {platform}: {reason}")
+                        all_valid = False
                 
-                if not is_valid:
-                    print(f"   ⚠️  {reason}, attempt {attempt + 1}/{retries}")
+                if not all_valid:
+                    print(f"   ⚠️  Validation failed, attempt {attempt + 1}/3")
                     time.sleep(2)
                     continue
                 
-                return content
+                return all_content
                 
             except Exception as e:
                 print(f"   ⚠️  Error: {str(e)[:100]}")
                 time.sleep(2)
         
-        print(f"   ❌ Failed after {retries} attempts")
+        print(f"   ❌ Failed after 3 attempts")
         return None
     
+    def _create_multi_platform_prompt(self, report: Dict) -> str:
+        """✅ برومبت محسّن - يطلب 3 منشورات بوضوح"""
+        
+        return f"""أنت كاتب محتوى محترف لوسائل التواصل الاجتماعي.
+
+📰 التقرير:
+العنوان: {report['title']}
+المحتوى: {report['content'][:1000]}...
+
+═══════════════════════════════════════
+المطلوب: اكتب 3 منشورات منفصلة
+═══════════════════════════════════════
+
+**قواعد مهمة:**
+- كل منشور له عنوان + محتوى
+- استخدم emojis مناسبة (2-3 فقط)
+- أضف هاشتاقات في النهاية
+- **مهم جداً:** ضع "_" بين كل كلمة في الهشتاق (مثال: #فلسطين_المحتلة)
+- كل هاشتاق يبدأ بـ #
+
+═══════════════════════════════════════
+الشكل المطلوب بالضبط:
+═══════════════════════════════════════
+
+[FACEBOOK]
+العنوان: عنوان جذاب (5-10 كلمات)
+المحتوى: 
+منشور Facebook هنا (400-600 حرف)
+- أسلوب جذاب ومشوّق
+- جملة افتتاحية قوية
+- 3 هاشتاقات
+
+[TWITTER]
+العنوان: عنوان قصير (5-8 كلمات)
+المحتوى:
+منشور Twitter هنا (250-350 حرف)
+- أسلوب مختصر وقوي
+- 2 هاشتاقات
+
+[INSTAGRAM]
+العنوان: عنوان ملهم (5-10 كلمات)
+المحتوى:
+منشور Instagram هنا (350-500 حرف)
+- أسلوب بصري وملهم
+- 5 هاشتاقات
+
+═══════════════════════════════════════
+الآن اكتب المنشورات الثلاثة:
+"""
+    
     def _format_combined_content(self, all_content: Dict[str, SocialMediaContent]) -> str:
-        """تنسيق المحتوى المجمّع كـ JSON"""
+        """✅ تنسيق المحتوى المجمّع كـ JSON"""
         json_content = {}
         for platform, content in all_content.items():
             json_content[platform] = content.to_dict()
@@ -432,7 +453,6 @@ class SocialMediaGenerator:
     def _fetch_reports_without_content(self, limit: int = 10) -> List[Dict]:
         """جلب التقارير بدون محتوى سوشيال ميديا"""
         try:
-            # ✅ الحل: استخدام NOT EXISTS بدل LEFT JOIN + DISTINCT
             query = """
                 SELECT 
                     gr.id, 
@@ -466,8 +486,7 @@ class SocialMediaGenerator:
         except Exception as e:
             print(f"   ❌ Error fetching reports: {e}")
             return []
-
-
+    
     def _fetch_recent_reports(self, limit: int = 10) -> List[Dict]:
         """جلب التقارير الأخيرة"""
         try:
@@ -497,7 +516,8 @@ class SocialMediaGenerator:
             ]
         except Exception as e:
             print(f"   ❌ Error fetching reports: {e}")
-            return []    
+            return []
+    
     def _get_existing_content(self, report_id: int) -> Optional[Dict]:
         """جلب المحتوى الموجود"""
         try:
@@ -519,7 +539,7 @@ class SocialMediaGenerator:
             return None
     
     def _save_combined_content(self, report_id: int, all_content: Dict[str, SocialMediaContent]) -> bool:
-        """حفظ المحتوى المجمّع"""
+        """✅ حفظ المحتوى المجمّع"""
         try:
             combined_content = self._format_combined_content(all_content)
             title = "Social Media Content"
@@ -542,7 +562,7 @@ class SocialMediaGenerator:
             return False
     
     def _update_combined_content(self, content_id: int, report_id: int, all_content: Dict[str, SocialMediaContent]) -> bool:
-        """تحديث المحتوى المجمّع"""
+        """✅ تحديث المحتوى المجمّع"""
         try:
             combined_content = self._format_combined_content(all_content)
             description = f"Social media posts for {', '.join(all_content.keys())}"
