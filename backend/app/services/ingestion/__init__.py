@@ -5,12 +5,13 @@
 
 from .scraper import NewsScraper
 from .source_detector import SourceDetector, SourceType, SourceInfo, detect_source
-from .web_scraper import WebScraper, ScrapedContent, scrape_url as web_scrape_url
+from .smart_scraper import SmartScraper, ScrapeResult, PageType, ContentStatus, smart_scrape
+from .news_crawler import NewsCrawler, CrawlResult, NewsArticle, crawl_news_site
 from .content_extractor import ContentExtractor, ExtractionResult, extract_and_prepare_news
 from .manual_scraper import ManualScraper, ManualScrapeResult, scrape_url, scrape_urls
 
 __all__ = [
-    # Original
+    # Original RSS
     'NewsScraper',
     
     # Source Detection
@@ -19,10 +20,18 @@ __all__ = [
     'SourceInfo',
     'detect_source',
     
-    # Web Scraping
-    'WebScraper',
-    'ScrapedContent',
-    'web_scrape_url',
+    # Smart Scraping (NEW)
+    'SmartScraper',
+    'ScrapeResult',
+    'PageType',
+    'ContentStatus',
+    'smart_scrape',
+    
+    # News Crawling
+    'NewsCrawler',
+    'CrawlResult',
+    'NewsArticle',
+    'crawl_news_site',
     
     # Content Extraction
     'ContentExtractor',
