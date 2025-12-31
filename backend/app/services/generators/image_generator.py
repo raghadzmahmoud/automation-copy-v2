@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-🎨 Image Generator Service - FINAL WORKING VERSION ✅
-Based on actual Gemini API response structure
-Response has 2 parts: [text_part, image_part]
-Image is in: response.parts[1].inline_data.data
+🎨 Image Generator Service
+توليد صور AI للتقارير باستخدام Gemini
+
+📁 S3 Path: generated/images/
 """
 
 import os
@@ -61,7 +61,10 @@ class ImageGenerator:
         try:
             self.s3_client = boto3.client('s3')
             self.bucket_name = os.getenv('S3_BUCKET_NAME', 'media-automation-bucket')
-            self.s3_folder = os.getenv('S3_IMAGE_FOLDER', 'image/')
+            
+            # ✅ المسار الصحيح: generated/images/
+            self.s3_folder = os.getenv('S3_GENERATED_IMAGES_FOLDER', 'generated/images/')
+            
             print(f"✅ S3 client initialized (Bucket: {self.bucket_name})")
             print(f"   📁 Upload folder: {self.s3_folder}")
         except Exception as e:
@@ -283,23 +286,17 @@ Style: Realistic photojournalism
         report_id: int, 
         retries: int = 3
     ) -> ImageGenerationResult:
-        """
-        ✅✅✅ FINAL WORKING VERSION
-        Based on actual Gemini response structure:
-        - response.parts is a list with 2 items
-        - parts[0] = text description
-        - parts[1] = inline_data with image
-        """
+        """توليد الصورة ورفعها على S3"""
         for attempt in range(retries):
             try:
                 print(f"   🎨 Generating image (attempt {attempt + 1}/{retries})...")
                 
-                # ✅ Config with response_modalities
+                # Config with response_modalities
                 config = GenerateContentConfig(
                     response_modalities=[Modality.TEXT, Modality.IMAGE]
                 )
                 
-                # ✅ Call Gemini API
+                # Call Gemini API
                 response = self.gemini_client.models.generate_content(
                     model=self.image_model,
                     contents=[prompt],
@@ -308,11 +305,7 @@ Style: Realistic photojournalism
                 
                 print(f"   ✅ Response received")
                 
-                # ✅ CRITICAL FIX: Loop through ALL parts
-                # Response structure:
-                # parts[0] = text: "Here's a professional..."
-                # parts[1] = inline_data: {mime_type, data}
-                
+                # Loop through ALL parts
                 image_data_raw = None
                 text_response = None
                 
@@ -324,12 +317,10 @@ Style: Realistic photojournalism
                 for i, part in enumerate(response.parts):
                     print(f"   📦 Checking part #{i+1}...")
                     
-                    # Check for text
                     if hasattr(part, 'text') and part.text:
                         text_response = part.text
                         print(f"      ✅ Text: {text_response[:60]}...")
                     
-                    # ✅ Check for inline_data (THIS IS THE IMAGE!)
                     if hasattr(part, 'inline_data') and part.inline_data:
                         print(f"      ✅✅✅ Found inline_data!")
                         
@@ -342,37 +333,25 @@ Style: Realistic photojournalism
                             data_size = len(image_data_raw)
                             print(f"         📏 Data size: {data_size:,} bytes")
                             print(f"         🎉 IMAGE DATA FOUND!")
-                            break  # Found the image, stop searching
+                            break
                 
-                # ✅ Check if we found image data
                 if not image_data_raw:
                     raise ValueError("No image data found in response parts")
                 
                 print(f"   ✅ Image data extracted ({len(image_data_raw):,} bytes)")
                 
-                # ✅✅✅ CRITICAL FIX: Data is BASE64 encoded!
-                # The data looks like: b'iVBORw0KGgo...' which is base64, not raw PNG
+                # Convert from Base64 to PNG
                 print(f"   🔄 Converting from Base64 to PNG...")
                 
-                import base64
-                
                 try:
-                    # First, check if data is already bytes (raw PNG) or base64 string
-                    # PNG signature: starts with \x89PNG\r\n\x1a\n
                     if image_data_raw[:8] == b'\x89PNG\r\n\x1a\n':
-                        # Already raw PNG bytes
                         print(f"      ℹ️  Data is raw PNG bytes")
                         decoded_data = image_data_raw
                     else:
-                        # It's base64 encoded - need to decode
                         print(f"      🔍 Detected Base64 encoding")
-                        print(f"         First 50 chars: {image_data_raw[:50]}")
-                        
-                        # Decode from base64
                         decoded_data = base64.b64decode(image_data_raw)
                         print(f"      ✅ Base64 decoded ({len(decoded_data):,} bytes)")
                     
-                    # Now open with PIL
                     temp_image = Image.open(io.BytesIO(decoded_data))
                     
                     print(f"      ✅ PIL opened image successfully")
@@ -380,7 +359,6 @@ Style: Realistic photojournalism
                     print(f"         Format: {temp_image.format}")
                     print(f"         Mode: {temp_image.mode}")
                     
-                    # Convert to PNG using Stack Overflow method
                     byteImgIO = io.BytesIO()
                     temp_image.save(byteImgIO, "PNG")
                     byteImgIO.seek(0)
@@ -392,7 +370,7 @@ Style: Realistic photojournalism
                     print(f"      ❌ Processing failed: {e}")
                     raise ValueError(f"Cannot process image data: {e}")
                 
-                # ✅ Upload to S3
+                # ✅ Upload to S3: generated/images/
                 timestamp = int(time.time())
                 file_name = f"report_{report_id}_{timestamp}.png"
                 s3_key = f"{self.s3_folder}{file_name}"
@@ -419,7 +397,6 @@ Style: Realistic photojournalism
                 error_msg = str(e)
                 print(f"   ⚠️  Error: {error_msg[:300]}")
                 
-                # Check for rate limit
                 if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
                     if attempt < retries - 1:
                         wait_time = 60
@@ -432,7 +409,6 @@ Style: Realistic photojournalism
                             error_message="Rate limit exceeded. Please try again later."
                         )
                 
-                # Other errors
                 if attempt < retries - 1:
                     print(f"   🔄 Retrying in 10 seconds...")
                     time.sleep(10)
