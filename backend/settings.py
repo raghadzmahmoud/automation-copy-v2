@@ -14,3 +14,4 @@ DB_CONFIG = {
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')           # للنصوص
 GEMINI_IMAGE_MODEL = os.getenv('GEMINI_IMAGE_MODEL', 'gemini-2.5-flash-image')  # للصور ← جديد
+GEMINI_EXTRACTION_MODEL = os.getenv('GEMINI_EXTRACTION_MODEL', 'gemini-2.5-flash-lite')
