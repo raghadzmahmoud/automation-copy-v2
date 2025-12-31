@@ -3,12 +3,20 @@
 """
 📰 News Scraper Service
 خدمة جمع الأخبار من RSS feeds
+
+📁 S3 Paths:
+   - original/images/  ← صور أصلية من الأخبار
+   - original/videos/  ← فيديوهات أصلية (مستقبلاً)
 """
 
+import os
 import time
 import re
+import hashlib
 import feedparser
 import requests
+import boto3
+from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
@@ -28,6 +36,7 @@ from app.services.processing.classifier import classify_with_gemini
 class NewsScraper:
     """
     News Scraper - سحب الأخبار من RSS feeds
+    مع دعم رفع الصور الأصلية على S3
     """
     
     def __init__(self):
@@ -37,6 +46,23 @@ class NewsScraper:
         
         # تتبع الأخبار المعالجة
         self.processed_titles = set()
+        
+        # تهيئة S3 Client للصور الأصلية
+        try:
+            self.s3_client = boto3.client('s3')
+            self.bucket_name = os.getenv('S3_BUCKET_NAME', 'media-automation-bucket')
+            
+            # ✅ المسارات الصحيحة
+            self.s3_original_images_folder = os.getenv('S3_ORIGINAL_IMAGES_FOLDER', 'original/images/')
+            self.s3_original_videos_folder = os.getenv('S3_ORIGINAL_VIDEOS_FOLDER', 'original/videos/')
+            
+            self.upload_to_s3 = True
+            print(f"✅ S3 client initialized for original media")
+            print(f"   📁 Images folder: {self.s3_original_images_folder}")
+            print(f"   📁 Videos folder: {self.s3_original_videos_folder}")
+        except Exception as e:
+            print(f"⚠️  S3 client not available: {e}")
+            self.upload_to_s3 = False
     
     def scrape_rss(self, url: str, source_id: int, language_id: int) -> List[Dict]:
         """
@@ -162,8 +188,22 @@ class NewsScraper:
             return None
         
         # استخراج الصور والفيديو
-        content_img = self._extract_image(entry)
-        content_video = self._extract_video(entry)
+        original_image_url = self._extract_image(entry)
+        original_video_url = self._extract_video(entry)
+        
+        # ✅ رفع الصورة الأصلية على S3: original/images/
+        content_img = ""
+        if original_image_url and self.upload_to_s3:
+            s3_image_url = self._upload_original_image_to_s3(
+                image_url=original_image_url,
+                source_id=source_id
+            )
+            content_img = s3_image_url if s3_image_url else original_image_url
+        else:
+            content_img = original_image_url
+        
+        # الفيديو - حالياً نحتفظ بالرابط الأصلي
+        content_video = original_video_url
         
         # التصنيف بالـ AI
         category_name, tags_str, tags_list, ai_success = classify_with_gemini(
@@ -191,27 +231,110 @@ class NewsScraper:
             'collected_at': datetime.now(timezone.utc)
         }
     
+    def _upload_original_image_to_s3(
+        self, 
+        image_url: str, 
+        source_id: int
+    ) -> Optional[str]:
+        """
+        ✅ تحميل الصورة الأصلية ورفعها على S3
+        
+        Args:
+            image_url: رابط الصورة الأصلية
+            source_id: ID المصدر
+        
+        Returns:
+            str: رابط S3 أو None
+        """
+        if not image_url or not self.upload_to_s3:
+            return None
+        
+        try:
+            # تحميل الصورة
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            }
+            
+            response = requests.get(
+                image_url,
+                headers=headers,
+                timeout=15,
+                verify=False
+            )
+            
+            if response.status_code != 200:
+                print(f"      ⚠️  Image download failed: {response.status_code}")
+                return None
+            
+            image_bytes = response.content
+            
+            if len(image_bytes) < 1000:  # أقل من 1KB
+                print(f"      ⚠️  Image too small, skipping")
+                return None
+            
+            # تحديد نوع الصورة
+            content_type = response.headers.get('Content-Type', 'image/jpeg')
+            if 'png' in content_type.lower() or image_url.lower().endswith('.png'):
+                extension = 'png'
+                content_type = 'image/png'
+            elif 'gif' in content_type.lower() or image_url.lower().endswith('.gif'):
+                extension = 'gif'
+                content_type = 'image/gif'
+            elif 'webp' in content_type.lower() or image_url.lower().endswith('.webp'):
+                extension = 'webp'
+                content_type = 'image/webp'
+            else:
+                extension = 'jpg'
+                content_type = 'image/jpeg'
+            
+            # إنشاء اسم فريد للملف
+            url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]
+            timestamp = int(time.time())
+            file_name = f"source_{source_id}_{timestamp}_{url_hash}.{extension}"
+            
+            # ✅ المسار الصحيح: original/images/
+            s3_key = f"{self.s3_original_images_folder}{file_name}"
+            
+            # رفع على S3
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=s3_key,
+                Body=image_bytes,
+                ContentType=content_type
+            )
+            
+            s3_url = f"https://{self.bucket_name}.s3.amazonaws.com/{s3_key}"
+            print(f"      📤 Image uploaded to S3: {s3_key}")
+            
+            return s3_url
+            
+        except requests.exceptions.Timeout:
+            print(f"      ⚠️  Image download timeout")
+            return None
+        except ClientError as e:
+            print(f"      ⚠️  S3 upload error: {e}")
+            return None
+        except Exception as e:
+            print(f"      ⚠️  Image upload error: {str(e)[:50]}")
+            return None
+    
     def _extract_date(self, entry) -> Optional[datetime]:
         """استخراج التاريخ"""
-        # محاولة published
         if hasattr(entry, 'published_parsed') and entry.published_parsed:
             try:
                 return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
             except:
                 pass
         
-        # محاولة updated
         if hasattr(entry, 'updated_parsed') and entry.updated_parsed:
             try:
                 return datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
             except:
                 pass
         
-        # محاولة custom parsing
         if hasattr(entry, 'published') and entry.published:
             date_str = entry.published.strip()
             
-            # DD/MM/YYYY - HH:MM
             match = re.match(r'(\d{2})/(\d{2})/(\d{4})\s*-?\s*(\d{2}):(\d{2})', date_str)
             if match:
                 day, month, year, hour, minute = match.groups()
@@ -238,7 +361,6 @@ class NewsScraper:
     
     def _extract_image(self, entry) -> str:
         """استخراج رابط الصورة"""
-        # من media_content
         if hasattr(entry, 'media_content') and entry.media_content:
             for media in entry.media_content:
                 if 'url' in media:
@@ -246,7 +368,6 @@ class NewsScraper:
                     if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
                         return url
         
-        # من المحتوى
         content = self._extract_content(entry)
         img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
         matches = re.findall(img_pattern, content)
@@ -258,13 +379,11 @@ class NewsScraper:
     
     def _extract_video(self, entry) -> str:
         """استخراج رابط الفيديو"""
-        # من media_content
         if hasattr(entry, 'media_content') and entry.media_content:
             for media in entry.media_content:
                 if 'url' in media and media.get('type', '').startswith('video'):
                     return media['url']
         
-        # من المحتوى
         content = self._extract_content(entry)
         video_pattern = r'https?://[^\s<>"]+\.(?:mp4|webm|ogg|m4v)'
         matches = re.findall(video_pattern, content, re.IGNORECASE)
@@ -278,14 +397,11 @@ class NewsScraper:
         if not text:
             return ""
         
-        # إزالة HTML tags
         text = re.sub(r'<.*?>', '', text)
         
-        # فك ترميز HTML entities
         import html
         text = html.unescape(text)
         
-        # تنظيف المسافات
         text = ' '.join(text.split())
         
         return text.strip()

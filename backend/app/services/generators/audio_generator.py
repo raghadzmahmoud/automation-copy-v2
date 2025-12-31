@@ -3,6 +3,8 @@
 """
 🎙️ Audio Generator Service
 توليد صوت للأخبار باستخدام Google Text-to-Speech
+
+📁 S3 Path: generated/audios/
 """
 
 import os
@@ -56,7 +58,10 @@ class AudioGenerator:
         try:
             self.s3_client = boto3.client('s3')
             self.bucket_name = os.getenv('S3_BUCKET_NAME', 'media-automation-bucket')
-            self.s3_folder = 'audio/'  # ← مجلد الصوتيات
+            
+            # ✅ المسار الصحيح: generated/audios/
+            self.s3_folder = os.getenv('S3_GENERATED_AUDIOS_FOLDER', 'generated/audios/')
+            
             print(f"✅ S3 client initialized (Bucket: {self.bucket_name})")
             print(f"   📁 Upload folder: {self.s3_folder}")
         except Exception as e:
@@ -65,12 +70,10 @@ class AudioGenerator:
         
         # تهيئة Google Text-to-Speech Client
         try:
-            # ✅ دعم Render: استخدام JSON من Environment Variable
             credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
             credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
             
             if credentials_json:
-                # Render: استخدام JSON مباشرة
                 import json
                 from google.oauth2 import service_account
                 
@@ -83,7 +86,6 @@ class AudioGenerator:
                 print(f"✅ Google TTS client initialized (from JSON env var)")
                 
             elif credentials_path and os.path.exists(credentials_path):
-                # Local: استخدام ملف
                 self.tts_client = texttospeech.TextToSpeechClient()
                 print(f"✅ Google TTS client initialized (from file)")
                 print(f"   🔑 Using credentials: {credentials_path}")
@@ -230,7 +232,7 @@ class AudioGenerator:
             else:
                 stats['failed'] += 1
             
-            # تأخير بين الطلبات (لتجنب Rate Limits)
+            # تأخير بين الطلبات
             if i < len(reports):
                 print("   ⏳ Waiting 5 seconds...")
                 time.sleep(5)
@@ -250,7 +252,6 @@ class AudioGenerator:
         title = report['title']
         content = report['content']
         
-        # تنسيق بصيغة نشرة إخبارية
         broadcast = f"""
 {title}
 
@@ -271,22 +272,18 @@ class AudioGenerator:
             try:
                 print(f"   🎙️ Generating audio (attempt {attempt + 1}/{retries})...")
                 
-                # ✅ إعداد النص
                 input_text = texttospeech.SynthesisInput(text=text)
                 
-                # ✅ صوت عربي ذكر - نفس tt.py
                 voice = texttospeech.VoiceSelectionParams(
                     language_code="ar-XA",
                     name="ar-XA-Chirp3-HD-Achird",
                     ssml_gender=texttospeech.SsmlVoiceGender.MALE
                 )
                 
-                # ✅ إعدادات الصوت - MP3
                 audio_config = texttospeech.AudioConfig(
                     audio_encoding=texttospeech.AudioEncoding.MP3
                 )
                 
-                # ✅ استدعاء Google TTS API
                 response = self.tts_client.synthesize_speech(
                     input=input_text,
                     voice=voice,
@@ -296,7 +293,7 @@ class AudioGenerator:
                 audio_bytes = response.audio_content
                 print(f"   ✅ Audio generated ({len(audio_bytes):,} bytes)")
                 
-                # ✅ رفع على S3
+                # ✅ Upload to S3: generated/audios/
                 timestamp = int(time.time())
                 file_name = f"report_{report_id}_{timestamp}.mp3"
                 s3_key = f"{self.s3_folder}{file_name}"
@@ -322,7 +319,6 @@ class AudioGenerator:
                 error_msg = str(e)
                 print(f"   ⚠️  Error: {error_msg[:300]}")
                 
-                # Check for rate limit
                 if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
                     if attempt < retries - 1:
                         wait_time = 60
@@ -335,7 +331,6 @@ class AudioGenerator:
                             error_message="Rate limit exceeded"
                         )
                 
-                # Other errors
                 if attempt < retries - 1:
                     print(f"   🔄 Retrying in 10 seconds...")
                     time.sleep(10)
