@@ -584,7 +584,6 @@ async def get_reports_with_complete_content(
         INNER JOIN complete_reports cr ON gr.id = cr.report_id
         LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
         LEFT JOIN categories c ON nc.category_id = c.id
-        WHERE gr.status = 'published'
         ORDER BY gr.created_at {sort_direction}
         LIMIT %s OFFSET %s
         """
@@ -609,7 +608,6 @@ async def get_reports_with_complete_content(
         SELECT COUNT(*) as total
         FROM complete_reports cr
         INNER JOIN generated_report gr ON cr.report_id = gr.id
-        WHERE gr.status = 'published'
         """
         
         cursor.execute(query_count)
