@@ -37,6 +37,15 @@ try:
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
+# Telegram (اختياري)
+try:
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    import asyncio
+    TELEGRAM_AVAILABLE = True
+except ImportError:
+    TELEGRAM_AVAILABLE = False
+
 # Database
 from app.utils.database import (
     get_source_type_id,
@@ -64,6 +73,7 @@ except ImportError:
 class SourceType(Enum):
     RSS = "RSS"
     WEB = "URL Scrape"
+    TELEGRAM = "Telegram"
     UNKNOWN = "unknown"
 
 
@@ -94,13 +104,47 @@ RSS_PATTERNS = [
     r'/feeds?/', r'/atom/?$', r'[?&]format=rss',
 ]
 
+TELEGRAM_PATTERNS = [
+    r'^https?://t\.me/s/([a-zA-Z_][a-zA-Z0-9_]{3,})/?',      # ✅ t.me/s/channel (web preview)
+    r'^https?://t\.me/([a-zA-Z_][a-zA-Z0-9_]{3,})/?$',       # t.me/channel
+    r'^https?://telegram\.me/s/([a-zA-Z_][a-zA-Z0-9_]{3,})', # telegram.me/s/channel
+    r'^https?://telegram\.me/([a-zA-Z_][a-zA-Z0-9_]{3,})/?$', # telegram.me/channel
+]
+
 def detect_source_type(url: str) -> SourceType:
     """اكتشاف نوع المصدر"""
     url_lower = url.lower()
+    
+    # Telegram - check first (t.me or telegram.me)
+    if 't.me/' in url_lower or 'telegram.me/' in url_lower:
+        # تأكد أنه ليس رابط رسالة محددة (يحتوي أرقام في النهاية)
+        # مثل t.me/channel/12345
+        if not re.search(r't\.me/[^/]+/\d+$', url_lower):
+            return SourceType.TELEGRAM
+    
+    # RSS
     for pattern in RSS_PATTERNS:
         if re.search(pattern, url_lower):
             return SourceType.RSS
+    
     return SourceType.WEB
+
+
+def extract_telegram_username(url: str) -> Optional[str]:
+    """استخراج username من رابط Telegram"""
+    # أنماط مختلفة
+    patterns = [
+        r't\.me/s/([a-zA-Z_][a-zA-Z0-9_]{3,})',   # t.me/s/channel
+        r't\.me/([a-zA-Z_][a-zA-Z0-9_]{3,})/?$',  # t.me/channel
+        r't\.me/([a-zA-Z_][a-zA-Z0-9_]{3,})/\d',  # t.me/channel/123 (نأخذ الـ channel فقط)
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    
+    return None
 
 
 def get_domain(url: str) -> str:
@@ -261,6 +305,416 @@ class RssScraper:
             return ""
         soup = BeautifulSoup(text, "html.parser")
         return soup.get_text(separator="\n", strip=True)
+
+
+# ============================================
+# 📱 Telegram Scraper
+# ============================================
+
+class TelegramScraper:
+    """
+    سحب من قنوات Telegram
+    
+    يدعم طريقتين:
+    1. Web Scraping (افتراضي) - للقنوات العامة، بدون credentials
+    2. Telethon API - يحتاج credentials، لكل القنوات
+    """
+    
+    SOURCE_TYPE_NAME = "Telegram"
+    
+    def __init__(self, language_id: int = 1, use_api: bool = False):
+        self.language_id = language_id
+        self.source_type_id = get_source_type_id(self.SOURCE_TYPE_NAME)
+        self.input_method_id = get_input_method_id("scraper")
+        self.use_api = use_api
+        
+        # Telegram API credentials (اختياري)
+        self.configured = False
+        if use_api:
+            try:
+                from settings import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_STRING_SESSION
+                self.api_id = TELEGRAM_API_ID
+                self.api_hash = TELEGRAM_API_HASH
+                self.string_session = TELEGRAM_STRING_SESSION
+                self.configured = True
+            except ImportError:
+                import os
+                self.api_id = os.getenv('TELEGRAM_API_ID')
+                self.api_hash = os.getenv('TELEGRAM_API_HASH')
+                self.string_session = os.getenv('TELEGRAM_STRING_SESSION')
+                self.configured = all([self.api_id, self.api_hash, self.string_session])
+            
+            if self.configured and self.api_id:
+                self.api_id = int(self.api_id)
+        
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'ar,en;q=0.9',
+        }
+    
+    def scrape(
+        self,
+        channel_url: str,
+        source_id: int,
+        existing_titles: Set[str],
+        max_items: int = 20,
+        save_to_db: bool = True
+    ) -> ScrapeResult:
+        """سحب من قناة Telegram"""
+        
+        print(f"\n📱 Telegram Scraper")
+        print(f"   🔗 {channel_url}")
+        
+        # استخراج username
+        username = extract_telegram_username(channel_url)
+        if not username:
+            return ScrapeResult(
+                success=False, url=channel_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error="Invalid Telegram channel URL"
+            )
+        
+        print(f"   📡 Channel: @{username}")
+        
+        # اختيار الطريقة
+        if self.use_api and self.configured:
+            print(f"   🔑 Using Telethon API")
+            return self._scrape_with_api(
+                username, channel_url, source_id,
+                existing_titles, max_items, save_to_db
+            )
+        else:
+            print(f"   🌐 Using Web Scraping (no credentials needed)")
+            return self._scrape_web(
+                username, channel_url, source_id,
+                existing_titles, max_items, save_to_db
+            )
+    
+    def _scrape_web(
+        self,
+        username: str,
+        channel_url: str,
+        source_id: int,
+        existing_titles: Set[str],
+        max_items: int,
+        save_to_db: bool
+    ) -> ScrapeResult:
+        """
+        ✅ سحب من صفحة الويب العامة للقناة
+        لا يحتاج أي credentials!
+        """
+        
+        # صفحة القناة العامة
+        web_url = f"https://t.me/s/{username}"
+        print(f"   🔗 Fetching: {web_url}")
+        
+        try:
+            response = requests.get(web_url, headers=self.headers, timeout=30)
+            response.raise_for_status()
+        except Exception as e:
+            return ScrapeResult(
+                success=False, url=channel_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error=f"Failed to fetch channel page: {e}"
+            )
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # البحث عن الرسائل
+        messages = soup.select('.tgme_widget_message')
+        
+        if not messages:
+            return ScrapeResult(
+                success=False, url=channel_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error="No messages found (channel may be private)"
+            )
+        
+        print(f"   ✅ Found {len(messages)} messages")
+        
+        news_items = []
+        saved_count = 0
+        skipped_count = 0
+        
+        for msg in messages[:max_items]:
+            try:
+                # استخراج message_id
+                msg_link = msg.get('data-post', '')
+                message_id = msg_link.split('/')[-1] if '/' in msg_link else ''
+                
+                # استخراج النص
+                text_elem = msg.select_one('.tgme_widget_message_text')
+                text = text_elem.get_text(strip=True) if text_elem else ""
+                
+                # تحديد نوع المحتوى
+                msg_type = "text"
+                if msg.select_one('.tgme_widget_message_photo'):
+                    msg_type = "photo"
+                elif msg.select_one('.tgme_widget_message_video'):
+                    msg_type = "video"
+                elif msg.select_one('.tgme_widget_message_voice'):
+                    msg_type = "audio"
+                elif msg.select_one('.tgme_widget_message_document'):
+                    msg_type = "document"
+                
+                # استخراج الصورة
+                image_url = None
+                photo_elem = msg.select_one('.tgme_widget_message_photo')
+                if photo_elem:
+                    style = photo_elem.get('style', '')
+                    # استخراج URL من background-image
+                    match = re.search(r"url\(['\"]?(.*?)['\"]?\)", style)
+                    if match:
+                        image_url = match.group(1)
+                
+                # استخراج التاريخ
+                time_elem = msg.select_one('.tgme_widget_message_date time')
+                pub_date = None
+                if time_elem and time_elem.get('datetime'):
+                    try:
+                        pub_date = date_parser.parse(time_elem['datetime'])
+                    except:
+                        pass
+                
+                # توليد العنوان
+                if text:
+                    title = text.split("\n", 1)[0][:100].strip()
+                    content = text
+                else:
+                    title = f"[{msg_type.upper()}]"
+                    content = f"[{msg_type.upper()} MESSAGE]"
+                
+                # تخطي إذا العنوان قصير جداً
+                if len(title) < 5 and msg_type == "text":
+                    continue
+                
+                # رابط الرسالة
+                message_link = f"https://t.me/{username}/{message_id}" if message_id else channel_url
+                
+                # Deduplication
+                dedup_key = f"{username}_{message_id}"
+                if title in existing_titles or dedup_key in existing_titles:
+                    skipped_count += 1
+                    continue
+                
+                # التصنيف
+                category, tags_str = self._classify(title, content)
+                category_id = get_or_create_category_id(category)
+                
+                news_item = {
+                    "title": title,
+                    "content_text": content,
+                    "content_img": image_url,
+                    "content_video": None,
+                    "tags": tags_str,
+                    "source_id": source_id,
+                    "source_type_id": self.source_type_id,
+                    "source_url": message_link,
+                    "language_id": self.language_id,
+                    "category_id": category_id,
+                    "input_method_id": self.input_method_id,
+                    "original_text": None,
+                    "metadata": json.dumps({
+                        "channel": username,
+                        "message_id": message_id,
+                        "message_type": msg_type,
+                        "method": "web_scraping"
+                    }),
+                    "published_at": pub_date or datetime.now(timezone.utc),
+                }
+                
+                news_items.append(news_item)
+                
+                if save_to_db:
+                    if save_news_item(news_item, existing_titles):
+                        saved_count += 1
+                        existing_titles.add(title)
+                        existing_titles.add(dedup_key)
+                        print(f"   ✅ [{msg_type}] {title[:50]}...")
+                    else:
+                        skipped_count += 1
+                else:
+                    print(f"   📝 [{msg_type}] {title[:50]}...")
+                    
+            except Exception as e:
+                print(f"   ⚠️ Error parsing message: {e}")
+                continue
+        
+        return ScrapeResult(
+            success=len(news_items) > 0,
+            url=channel_url,
+            source_type=self.SOURCE_TYPE_NAME,
+            source_type_id=self.source_type_id,
+            source_id=source_id,
+            extracted=len(news_items),
+            saved=saved_count,
+            skipped=skipped_count,
+            items=news_items
+        )
+    
+    def _scrape_with_api(
+        self,
+        username: str,
+        channel_url: str,
+        source_id: int,
+        existing_titles: Set[str],
+        max_items: int,
+        save_to_db: bool
+    ) -> ScrapeResult:
+        """سحب باستخدام Telethon API (يحتاج credentials)"""
+        
+        if not TELEGRAM_AVAILABLE:
+            return ScrapeResult(
+                success=False, url=channel_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error="Telethon not installed. Run: pip install telethon"
+            )
+        
+        if not self.configured:
+            return ScrapeResult(
+                success=False, url=channel_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error="Telegram credentials not configured"
+            )
+        
+        # تشغيل async
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(
+            self._scrape_api_async(
+                username, channel_url, source_id,
+                existing_titles, max_items, save_to_db
+            )
+        )
+    
+    async def _scrape_api_async(
+        self,
+        username: str,
+        channel_url: str,
+        source_id: int,
+        existing_titles: Set[str],
+        max_items: int,
+        save_to_db: bool
+    ) -> ScrapeResult:
+        """السحب بشكل async باستخدام Telethon"""
+        
+        client = TelegramClient(
+            StringSession(self.string_session),
+            self.api_id,
+            self.api_hash
+        )
+        
+        try:
+            await client.start()
+            print(f"   ✅ Connected to Telegram API")
+            
+            news_items = []
+            saved_count = 0
+            skipped_count = 0
+            
+            async for message in client.iter_messages(username, limit=max_items):
+                text = (message.text or "").strip()
+                
+                msg_type = "text"
+                if message.photo:
+                    msg_type = "photo"
+                elif message.video:
+                    msg_type = "video"
+                elif message.voice or message.audio:
+                    msg_type = "audio"
+                elif message.document:
+                    msg_type = "document"
+                
+                if text:
+                    title = text.split("\n", 1)[0][:100].strip()
+                    content = text
+                else:
+                    title = f"[{msg_type.upper()}]"
+                    content = f"[{msg_type.upper()} MESSAGE]"
+                
+                if len(title) < 5 and msg_type == "text":
+                    continue
+                
+                message_link = f"https://t.me/{username}/{message.id}"
+                
+                dedup_key = f"{username}_{message.id}"
+                if title in existing_titles or dedup_key in existing_titles:
+                    skipped_count += 1
+                    continue
+                
+                category, tags_str = self._classify(title, content)
+                category_id = get_or_create_category_id(category)
+                
+                news_item = {
+                    "title": title,
+                    "content_text": content,
+                    "content_img": None,
+                    "content_video": None,
+                    "tags": tags_str,
+                    "source_id": source_id,
+                    "source_type_id": self.source_type_id,
+                    "source_url": message_link,
+                    "language_id": self.language_id,
+                    "category_id": category_id,
+                    "input_method_id": self.input_method_id,
+                    "original_text": None,
+                    "metadata": json.dumps({
+                        "channel": username,
+                        "message_id": message.id,
+                        "message_type": msg_type,
+                        "method": "telethon_api"
+                    }),
+                    "published_at": message.date.replace(tzinfo=timezone.utc) if message.date else datetime.now(timezone.utc),
+                }
+                
+                news_items.append(news_item)
+                
+                if save_to_db:
+                    if save_news_item(news_item, existing_titles):
+                        saved_count += 1
+                        existing_titles.add(title)
+                        existing_titles.add(dedup_key)
+                        print(f"   ✅ [{msg_type}] {title[:50]}...")
+                    else:
+                        skipped_count += 1
+                else:
+                    print(f"   📝 [{msg_type}] {title[:50]}...")
+            
+            await client.disconnect()
+            
+            return ScrapeResult(
+                success=len(news_items) > 0,
+                url=channel_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                source_type_id=self.source_type_id,
+                source_id=source_id,
+                extracted=len(news_items),
+                saved=saved_count,
+                skipped=skipped_count,
+                items=news_items
+            )
+            
+        except Exception as e:
+            await client.disconnect()
+            return ScrapeResult(
+                success=False, url=channel_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error=str(e)
+            )
+    
+    def _classify(self, title: str, content: str) -> tuple:
+        if CLASSIFIER_AVAILABLE:
+            try:
+                cat, tags, _, _ = classify_with_gemini(title, content)
+                return cat, tags
+            except:
+                pass
+        return "أخرى", ""
 
 
 # ============================================
@@ -713,10 +1167,18 @@ def scrape_url(
     url: str,
     save_to_db: bool = True,
     max_articles: int = 10,
-    language_id: int = 1
+    language_id: int = 1,
+    use_telegram_api: bool = False
 ) -> ScrapeResult:
     """
     🎯 الدالة الرئيسية لسحب الأخبار
+    
+    Args:
+        url: الرابط (RSS, Web, أو Telegram)
+        save_to_db: حفظ في Database
+        max_articles: الحد الأقصى للأخبار
+        language_id: ID اللغة
+        use_telegram_api: استخدام Telethon API بدل Web Scraping للـ Telegram
     """
     start_time = time.time()
     
@@ -732,7 +1194,12 @@ def scrape_url(
     
     # اكتشاف النوع
     source_type = detect_source_type(url)
-    domain = get_domain(url)
+    
+    # للـ Telegram، الدومين هو username
+    if source_type == SourceType.TELEGRAM:
+        domain = extract_telegram_username(url) or "telegram"
+    else:
+        domain = get_domain(url)
     
     print(f"🏷️ Type: {source_type.value}")
     print(f"📍 Domain: {domain}")
@@ -758,6 +1225,15 @@ def scrape_url(
         scraper = RssScraper(language_id=language_id)
         result = scraper.scrape(
             feed_url=url,
+            source_id=source_id,
+            existing_titles=existing_titles,
+            max_items=max_articles,
+            save_to_db=save_to_db
+        )
+    elif source_type == SourceType.TELEGRAM:
+        scraper = TelegramScraper(language_id=language_id, use_api=use_telegram_api)
+        result = scraper.scrape(
+            channel_url=url,
             source_id=source_id,
             existing_titles=existing_titles,
             max_items=max_articles,
