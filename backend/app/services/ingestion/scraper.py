@@ -1,423 +1,732 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-📰 News Scraper Service
-خدمة جمع الأخبار من RSS feeds
+📥 Unified News Scraper
+ملف واحد شامل لسحب الأخبار من RSS و Web
 
-📁 S3 Paths:
-   - original/images/  ← صور أصلية من الأخبار
-   - original/videos/  ← فيديوهات أصلية (مستقبلاً)
+📊 Source Types:
+   - RSS (source_type_id from DB)
+   - URL Scrape (source_type_id from DB)
+
+Usage:
+    from app.services.ingestion.scraper import scrape_url
+    result = scrape_url("https://example.com/rss")
 """
 
-import os
-import time
 import re
-import hashlib
-import feedparser
+import time
+import json
 import requests
-import boto3
-from botocore.exceptions import ClientError
+import feedparser
+import warnings
+from enum import Enum
+from typing import List, Dict, Optional, Set
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Tuple
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
+from dateutil import parser as date_parser
 
-from settings import GEMINI_API_KEY, GEMINI_MODEL
-from app.config.user_config import user_config
+# تجاهل تحذيرات SSL
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+# Playwright (اختياري)
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+
+# Database
 from app.utils.database import (
-    get_source_id,
-    get_source_last_fetched,
-    update_source_last_fetched,
-    get_language_id,
+    get_source_type_id,
+    get_or_create_source,
     get_or_create_category_id,
-    save_news_batch
+    get_input_method_id,
+    get_recent_news_titles,
+    save_news_item,
+    update_source_last_fetched,
 )
-from app.services.processing.classifier import classify_with_gemini
+
+# Classifier
+try:
+    from app.services.processing.classifier import classify_with_gemini
+    CLASSIFIER_AVAILABLE = True
+except ImportError:
+    CLASSIFIER_AVAILABLE = False
+    print("⚠️ Classifier not available")
 
 
-class NewsScraper:
-    """
-    News Scraper - سحب الأخبار من RSS feeds
-    مع دعم رفع الصور الأصلية على S3
-    """
+# ============================================
+# 📊 Enums & Data Classes
+# ============================================
+
+class SourceType(Enum):
+    RSS = "RSS"
+    WEB = "URL Scrape"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class ScrapeResult:
+    """نتيجة السحب"""
+    success: bool
+    url: str
+    source_type: str
+    source_type_id: int = 0
+    source_id: int = 0
     
-    def __init__(self):
-        """تهيئة السحب"""
-        self.timeout = user_config.scraping_timeout_seconds
-        self.max_news_per_source = user_config.max_news_per_source
-        
-        # تتبع الأخبار المعالجة
-        self.processed_titles = set()
-        
-        # تهيئة S3 Client للصور الأصلية
-        try:
-            self.s3_client = boto3.client('s3')
-            self.bucket_name = os.getenv('S3_BUCKET_NAME', 'media-automation-bucket')
-            
-            # ✅ المسارات الصحيحة
-            self.s3_original_images_folder = os.getenv('S3_ORIGINAL_IMAGES_FOLDER', 'original/images/')
-            self.s3_original_videos_folder = os.getenv('S3_ORIGINAL_VIDEOS_FOLDER', 'original/videos/')
-            
-            self.upload_to_s3 = True
-            print(f"✅ S3 client initialized for original media")
-            print(f"   📁 Images folder: {self.s3_original_images_folder}")
-            print(f"   📁 Videos folder: {self.s3_original_videos_folder}")
-        except Exception as e:
-            print(f"⚠️  S3 client not available: {e}")
-            self.upload_to_s3 = False
+    extracted: int = 0
+    saved: int = 0
+    skipped: int = 0
     
-    def scrape_rss(self, url: str, source_id: int, language_id: int) -> List[Dict]:
-        """
-        سحب أخبار من RSS feed
+    items: List[Dict] = field(default_factory=list)
+    error: Optional[str] = None
+    time_seconds: float = 0.0
+
+
+# ============================================
+# 🔍 Source Detection
+# ============================================
+
+RSS_PATTERNS = [
+    r'\.rss$', r'\.xml$', r'/rss/?$', r'/feed/?$',
+    r'/feeds?/', r'/atom/?$', r'[?&]format=rss',
+]
+
+def detect_source_type(url: str) -> SourceType:
+    """اكتشاف نوع المصدر"""
+    url_lower = url.lower()
+    for pattern in RSS_PATTERNS:
+        if re.search(pattern, url_lower):
+            return SourceType.RSS
+    return SourceType.WEB
+
+
+def get_domain(url: str) -> str:
+    """استخراج الدومين"""
+    try:
+        return urlparse(url).netloc.replace('www.', '')
+    except:
+        return ""
+
+
+# ============================================
+# 📰 RSS Scraper
+# ============================================
+
+class RssScraper:
+    """سحب من RSS Feeds"""
+    
+    SOURCE_TYPE_NAME = "RSS"
+    
+    def __init__(self, language_id: int = 1):
+        self.language_id = language_id
+        self.source_type_id = get_source_type_id(self.SOURCE_TYPE_NAME)
+        self.input_method_id = get_input_method_id("scraper")
+    
+    def scrape(
+        self,
+        feed_url: str,
+        source_id: int,
+        existing_titles: Set[str],
+        max_items: int = 20,
+        save_to_db: bool = True
+    ) -> ScrapeResult:
+        """سحب من RSS"""
         
-        Args:
-            url: رابط RSS
-            source_id: ID المصدر
-            language_id: ID اللغة
-        
-        Returns:
-            List[Dict]: قائمة الأخبار
-        """
-        news_list = []
+        print(f"\n📰 RSS Scraper")
+        print(f"   🔗 {feed_url}")
         
         try:
-            # جلب RSS feed
-            feed = self._fetch_rss(url)
+            # Parse feed
+            feed = feedparser.parse(feed_url)
             
             if not feed.entries:
-                print(f"   ⚠️  No entries found")
-                return []
+                return ScrapeResult(
+                    success=False, url=feed_url,
+                    source_type=self.SOURCE_TYPE_NAME,
+                    error="No entries in feed"
+                )
             
-            print(f"   📊 Found {len(feed.entries)} entries")
+            print(f"   ✅ Found {len(feed.entries)} entries")
+
+            # طباعة جميع الروابط الكاملة
+            for entry in feed.entries[:max_items]:
+                link = entry.get("link", "")
+                if link:
+                    print(f"   🔗 {link}")
+
+            news_items = []
+            saved_count = 0
+            skipped_count = 0
             
-            # last_fetched للفلترة
-            last_fetched = get_source_last_fetched(source_id)
-            
-            # معالجة كل entry
-            count = 0
-            for idx, entry in enumerate(feed.entries, 1):
-                # حد الأخبار
-                if self.max_news_per_source and count >= self.max_news_per_source:
-                    break
+            for entry in feed.entries[:max_items]:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "")
                 
-                try:
-                    # استخراج البيانات
-                    news_item = self._process_entry(
-                        entry, 
-                        source_id, 
-                        language_id,
-                        last_fetched
-                    )
-                    
-                    if news_item:
-                        news_list.append(news_item)
-                        count += 1
-                        
-                        # طباعة التقدم
-                        print(f"   [{count:3d}] ✓ {news_item['title'][:40]}...")
-                        
-                        # راحة بين الأخبار
-                        time.sleep(3)
-                
-                except Exception as e:
-                    print(f"   [{idx:3d}] ❌ Error: {str(e)[:50]}")
+                if not title:
                     continue
+                
+                # Deduplication
+                if title in existing_titles:
+                    skipped_count += 1
+                    continue
+                
+                # استخراج المحتوى
+                content = self._get_content(entry)
+                image = self._get_image(entry)
+                pub_date = self._get_date(entry)
+                
+                # التصنيف
+                category, tags_str = self._classify(title, content)
+                category_id = get_or_create_category_id(category)
+                
+                news_item = {
+                    "title": title,
+                    "content_text": self._clean_html(content),
+                    "content_img": image,
+                    "content_video": None,
+                    "tags": tags_str,
+                    "source_id": source_id,
+                    "source_type_id": self.source_type_id,
+                    "source_url": link,  # ✅ رابط الخبر
+                    "language_id": self.language_id,
+                    "category_id": category_id,
+                    "input_method_id": self.input_method_id,
+                    "original_text": None,
+                    "metadata": json.dumps({"feed_url": feed_url}),
+                    "published_at": pub_date,
+                }
+                
+                news_items.append(news_item)
+                
+                if save_to_db:
+                    if save_news_item(news_item, existing_titles):
+                        saved_count += 1
+                        existing_titles.add(title)
+                        print(f"   ✅ {title[:50]}...")
+                    else:
+                        skipped_count += 1
             
-            # تحديث last_fetched
-            if news_list:
-                update_source_last_fetched(source_id)
-            
-            return news_list
+            return ScrapeResult(
+                success=True,
+                url=feed_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                source_type_id=self.source_type_id,
+                source_id=source_id,
+                extracted=len(news_items),
+                saved=saved_count,
+                skipped=skipped_count,
+                items=news_items
+            )
             
         except Exception as e:
-            print(f"   ❌ Scraping error: {e}")
-            return []
-    
-    def _fetch_rss(self, url: str):
-        """جلب RSS feed"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/rss+xml, application/xml, */*',
-            }
-            
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=self.timeout,
-                verify=False,
-                allow_redirects=True
+            return ScrapeResult(
+                success=False, url=feed_url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error=str(e)
             )
-            
-            response.raise_for_status()
-            return feedparser.parse(response.content)
-            
-        except Exception as e:
-            print(f"   ❌ Fetch error: {e}")
-            return feedparser.parse("")
     
-    def _process_entry(
-        self, 
-        entry, 
-        source_id: int, 
-        language_id: int,
-        last_fetched: Optional[datetime]
-    ) -> Optional[Dict]:
-        """معالجة entry واحد"""
-        
-        # استخراج العنوان
-        title = self._clean_html(entry.get('title', ''))
-        
-        # فحص التكرار
-        if self._is_duplicate(title):
-            return None
-        
-        # استخراج التاريخ
-        pub_date = self._extract_date(entry)
-        if not pub_date:
-            pub_date = datetime.now(timezone.utc)
-        
-        # فلترة القديم
-        if last_fetched and pub_date.replace(tzinfo=timezone.utc) <= last_fetched.replace(tzinfo=timezone.utc):
-            return None
-        
-        # استخراج المحتوى
-        content = self._extract_content(entry)
-        content_text = self._clean_html(content)
-        
-        # التحقق من الصحة
-        if len(title) < 10 and len(content_text) < 20:
-            return None
-        
-        # استخراج الصور والفيديو
-        original_image_url = self._extract_image(entry)
-        original_video_url = self._extract_video(entry)
-        
-        # ✅ رفع الصورة الأصلية على S3: original/images/
-        content_img = ""
-        if original_image_url and self.upload_to_s3:
-            s3_image_url = self._upload_original_image_to_s3(
-                image_url=original_image_url,
-                source_id=source_id
-            )
-            content_img = s3_image_url if s3_image_url else original_image_url
-        else:
-            content_img = original_image_url
-        
-        # الفيديو - حالياً نحتفظ بالرابط الأصلي
-        content_video = original_video_url
-        
-        # التصنيف بالـ AI
-        category_name, tags_str, tags_list, ai_success = classify_with_gemini(
-            title, 
-            content_text,
-            max_retries=3
-        )
-        
-        # الحصول على category_id
-        category_id = get_or_create_category_id(category_name)
-        
-        # إضافة للمعالجة
-        self.processed_titles.add(title.lower())
-        
-        return {
-            'title': title,
-            'content_text': content_text,
-            'content_img': content_img,
-            'content_video': content_video,
-            'tags': tags_str,
-            'source_id': source_id,
-            'language_id': language_id,
-            'category_id': category_id,
-            'published_at': pub_date,
-            'collected_at': datetime.now(timezone.utc)
-        }
+    def _get_content(self, entry) -> str:
+        if "content" in entry and entry.content:
+            return entry.content[0].get("value", "")
+        return entry.get("summary", "") or entry.get("description", "")
     
-    def _upload_original_image_to_s3(
-        self, 
-        image_url: str, 
-        source_id: int
-    ) -> Optional[str]:
-        """
-        ✅ تحميل الصورة الأصلية ورفعها على S3
-        
-        Args:
-            image_url: رابط الصورة الأصلية
-            source_id: ID المصدر
-        
-        Returns:
-            str: رابط S3 أو None
-        """
-        if not image_url or not self.upload_to_s3:
-            return None
-        
-        try:
-            # تحميل الصورة
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            }
-            
-            response = requests.get(
-                image_url,
-                headers=headers,
-                timeout=15,
-                verify=False
-            )
-            
-            if response.status_code != 200:
-                print(f"      ⚠️  Image download failed: {response.status_code}")
-                return None
-            
-            image_bytes = response.content
-            
-            if len(image_bytes) < 1000:  # أقل من 1KB
-                print(f"      ⚠️  Image too small, skipping")
-                return None
-            
-            # تحديد نوع الصورة
-            content_type = response.headers.get('Content-Type', 'image/jpeg')
-            if 'png' in content_type.lower() or image_url.lower().endswith('.png'):
-                extension = 'png'
-                content_type = 'image/png'
-            elif 'gif' in content_type.lower() or image_url.lower().endswith('.gif'):
-                extension = 'gif'
-                content_type = 'image/gif'
-            elif 'webp' in content_type.lower() or image_url.lower().endswith('.webp'):
-                extension = 'webp'
-                content_type = 'image/webp'
-            else:
-                extension = 'jpg'
-                content_type = 'image/jpeg'
-            
-            # إنشاء اسم فريد للملف
-            url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]
-            timestamp = int(time.time())
-            file_name = f"source_{source_id}_{timestamp}_{url_hash}.{extension}"
-            
-            # ✅ المسار الصحيح: original/images/
-            s3_key = f"{self.s3_original_images_folder}{file_name}"
-            
-            # رفع على S3
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=s3_key,
-                Body=image_bytes,
-                ContentType=content_type
-            )
-            
-            s3_url = f"https://{self.bucket_name}.s3.amazonaws.com/{s3_key}"
-            print(f"      📤 Image uploaded to S3: {s3_key}")
-            
-            return s3_url
-            
-        except requests.exceptions.Timeout:
-            print(f"      ⚠️  Image download timeout")
-            return None
-        except ClientError as e:
-            print(f"      ⚠️  S3 upload error: {e}")
-            return None
-        except Exception as e:
-            print(f"      ⚠️  Image upload error: {str(e)[:50]}")
-            return None
-    
-    def _extract_date(self, entry) -> Optional[datetime]:
-        """استخراج التاريخ"""
-        if hasattr(entry, 'published_parsed') and entry.published_parsed:
-            try:
-                return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-            except:
-                pass
-        
-        if hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-            try:
-                return datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
-            except:
-                pass
-        
-        if hasattr(entry, 'published') and entry.published:
-            date_str = entry.published.strip()
-            
-            match = re.match(r'(\d{2})/(\d{2})/(\d{4})\s*-?\s*(\d{2}):(\d{2})', date_str)
-            if match:
-                day, month, year, hour, minute = match.groups()
-                try:
-                    return datetime(
-                        int(year), int(month), int(day),
-                        int(hour), int(minute),
-                        tzinfo=timezone.utc
-                    )
-                except:
-                    pass
-        
+    def _get_image(self, entry) -> Optional[str]:
+        if "media_content" in entry:
+            for media in entry.media_content:
+                url = media.get("url", "")
+                if any(ext in url.lower() for ext in ['.jpg', '.png', '.jpeg']):
+                    return url
+        if "media_thumbnail" in entry:
+            return entry.media_thumbnail[0].get("url")
         return None
     
-    def _extract_content(self, entry) -> str:
-        """استخراج المحتوى"""
-        if hasattr(entry, 'content') and entry.content:
-            return entry.content[0].value
-        elif hasattr(entry, 'summary'):
-            return entry.summary
-        elif hasattr(entry, 'description'):
-            return entry.description
-        return ""
+    def _get_date(self, entry) -> datetime:
+        for field in ["published_parsed", "updated_parsed"]:
+            if hasattr(entry, field) and getattr(entry, field):
+                try:
+                    import time as t
+                    return datetime.fromtimestamp(t.mktime(getattr(entry, field)), tz=timezone.utc)
+                except:
+                    pass
+        return datetime.now(timezone.utc)
     
-    def _extract_image(self, entry) -> str:
-        """استخراج رابط الصورة"""
-        if hasattr(entry, 'media_content') and entry.media_content:
-            for media in entry.media_content:
-                if 'url' in media:
-                    url = media['url']
-                    if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                        return url
-        
-        content = self._extract_content(entry)
-        img_pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
-        matches = re.findall(img_pattern, content)
-        for match in matches:
-            if any(ext in match.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                return match
-        
-        return ""
-    
-    def _extract_video(self, entry) -> str:
-        """استخراج رابط الفيديو"""
-        if hasattr(entry, 'media_content') and entry.media_content:
-            for media in entry.media_content:
-                if 'url' in media and media.get('type', '').startswith('video'):
-                    return media['url']
-        
-        content = self._extract_content(entry)
-        video_pattern = r'https?://[^\s<>"]+\.(?:mp4|webm|ogg|m4v)'
-        matches = re.findall(video_pattern, content, re.IGNORECASE)
-        if matches:
-            return matches[0]
-        
-        return ""
+    def _classify(self, title: str, content: str) -> tuple:
+        if CLASSIFIER_AVAILABLE:
+            try:
+                cat, tags, _, _ = classify_with_gemini(title, content)
+                return cat, tags
+            except:
+                pass
+        return "أخرى", ""
     
     def _clean_html(self, text: str) -> str:
-        """إزالة HTML tags"""
         if not text:
             return ""
-        
-        text = re.sub(r'<.*?>', '', text)
-        
-        import html
-        text = html.unescape(text)
-        
-        text = ' '.join(text.split())
-        
-        return text.strip()
+        soup = BeautifulSoup(text, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+
+
+# ============================================
+# 🌐 Web Scraper (with Crawler)
+# ============================================
+
+# إعدادات المواقع المعروفة
+SITE_CONFIGS = {
+    'bbc.com': {
+        'dynamic': True,
+        'article_selectors': ['a[href*="/arabic/"]', '.media__link', 'article a'],
+        'title_selectors': ['h1', '.story-headline'],
+        'content_selectors': ['article', '.story-body'],
+    },
+    'rt.com': {
+        'dynamic': True,
+        'article_selectors': ['a[href*="/news/"]', '.card__heading a', 'article a'],
+        'title_selectors': ['h1', '.article__heading'],
+        'content_selectors': ['.article__text', '.text'],
+    },
+    'aljazeera.net': {
+        'dynamic': True,
+        'article_selectors': ['a[href*="/news/"]', '.gc__title a', 'article a'],
+        'title_selectors': ['h1'],
+        'content_selectors': ['.wysiwyg', '.article-body'],
+    },
+    'wafa.ps': {
+        'dynamic': True,
+        'article_selectors': ['a[href*="/Pages/Details/"]', '.news-item a', 'article a'],
+        'title_selectors': ['h1', '.news-title'],
+        'content_selectors': ['.news-content', '.content'],
+    },
+}
+
+ARTICLE_PATTERNS = [
+    r'/\d+-[^/]+/',  # نمط خاص للروابط مثل /1745080-عنوان-بالعربية/
+]
+
+IGNORE_PATTERNS = [
+    r'^#', r'^javascript:', r'^mailto:',
+    r'/tag/', r'/category/', r'/author/',
+    r'/search', r'/login', r'/about',
+    r'\.(jpg|png|gif|pdf|mp4)$',
+]
+
+
+class WebScraper:
+    """سحب من صفحات الويب مع Crawler"""
     
-    def _is_duplicate(self, title: str) -> bool:
-        """فحص التكرار"""
-        if not title:
+    SOURCE_TYPE_NAME = "URL Scrape"
+    
+    def __init__(self, language_id: int = 1, max_articles: int = 10, timeout: int = 30):
+        self.language_id = language_id
+        self.max_articles = max_articles
+        self.timeout = timeout
+        self.source_type_id = get_source_type_id(self.SOURCE_TYPE_NAME)
+        self.input_method_id = get_input_method_id("scraper")
+        
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'ar,en;q=0.9',
+        }
+    
+    def scrape(
+        self,
+        url: str,
+        source_id: int,
+        existing_titles: Set[str],
+        save_to_db: bool = True
+    ) -> ScrapeResult:
+        """سحب من الويب"""
+        
+        print(f"\n🌐 Web Scraper")
+        print(f"   🔗 {url}")
+        
+        domain = get_domain(url)
+        config = self._get_config(domain)
+        
+        # جلب HTML
+        use_dynamic = config.get('dynamic', False) and PLAYWRIGHT_AVAILABLE
+        
+        if use_dynamic:
+            print(f"   🎭 Using Playwright")
+            html = self._fetch_playwright(url)
+        else:
+            print(f"   📄 Using requests")
+            html = self._fetch_requests(url)
+        
+        if not html:
+            return ScrapeResult(
+                success=False, url=url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error="Failed to fetch page"
+            )
+        
+        # استخراج روابط المقالات
+        soup = BeautifulSoup(html, 'html.parser')
+        article_links = self._find_articles(soup, url, config)
+
+        # تصفية الروابط للحصول على مقالات فقط
+        filtered_links = [link for link in article_links if self._looks_like_article(link)]
+
+        print(f"   🔗 Found {len(filtered_links)} articles")
+
+        # طباعة جميع الروابط الكاملة المصفاة
+        for link in filtered_links:
+            print(f"   🔗 {link}")
+
+        if not filtered_links:
+            return ScrapeResult(
+                success=False, url=url,
+                source_type=self.SOURCE_TYPE_NAME,
+                error="No articles found"
+            )
+        
+        # سحب المقالات
+        news_items = []
+        saved_count = 0
+        skipped_count = 0
+
+        for i, link in enumerate(filtered_links[:self.max_articles]):
+            print(f"   📰 [{i+1}/{min(len(article_links), self.max_articles)}] {link[:60]}...")
+            
+            article = self._fetch_article(link, config)
+            if not article:
+                continue
+            
+            title = article.get("title", "").strip()
+            if not title:
+                continue
+            
+            # Deduplication
+            if title in existing_titles:
+                print(f"      ⏭️ Skip (exists)")
+                skipped_count += 1
+                continue
+            
+            # التصنيف
+            content = article.get("content", "")
+            category, tags_str = self._classify(title, content)
+            category_id = get_or_create_category_id(category)
+            
+            news_item = {
+                "title": title,
+                "content_text": content,
+                "content_img": article.get("image"),
+                "content_video": None,
+                "tags": tags_str,
+                "source_id": source_id,
+                "source_type_id": self.source_type_id,
+                "source_url": link,  # ✅ رابط الخبر
+                "language_id": self.language_id,
+                "category_id": category_id,
+                "input_method_id": self.input_method_id,
+                "original_text": None,
+                "metadata": json.dumps({"scraped_from": url}),
+                "published_at": article.get("date") or datetime.now(timezone.utc),
+            }
+            
+            news_items.append(news_item)
+            
+            if save_to_db:
+                if save_news_item(news_item, existing_titles):
+                    saved_count += 1
+                    existing_titles.add(title)
+                    print(f"      ✅ Saved")
+                else:
+                    skipped_count += 1
+            
+            time.sleep(1)  # تأخير
+        
+        return ScrapeResult(
+            success=len(news_items) > 0,
+            url=url,
+            source_type=self.SOURCE_TYPE_NAME,
+            source_type_id=self.source_type_id,
+            source_id=source_id,
+            extracted=len(news_items),
+            saved=saved_count,
+            skipped=skipped_count,
+            items=news_items
+        )
+    
+    def _get_config(self, domain: str) -> Dict:
+        for site, config in SITE_CONFIGS.items():
+            if site in domain:
+                return config
+        return {}
+    
+    def _fetch_requests(self, url: str) -> Optional[str]:
+        try:
+            response = requests.get(url, headers=self.headers, timeout=self.timeout, verify=False)
+            response.raise_for_status()
+            return response.text
+        except:
+            return None
+    
+    def _fetch_playwright(self, url: str) -> Optional[str]:
+        if not PLAYWRIGHT_AVAILABLE:
+            return self._fetch_requests(url)
+        
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page(user_agent=self.headers['User-Agent'])
+                page.goto(url, wait_until='networkidle', timeout=self.timeout * 1000)
+                
+                # تمرير
+                for _ in range(3):
+                    page.evaluate('window.scrollBy(0, 500)')
+                    time.sleep(0.5)
+                
+                html = page.content()
+                browser.close()
+                return html
+        except Exception as e:
+            print(f"   ⚠️ Playwright error: {e}")
+            return self._fetch_requests(url)
+    
+    def _find_articles(self, soup: BeautifulSoup, base_url: str, config: Dict) -> List[str]:
+        links = set()
+        
+        # Selectors خاصة
+        for selector in config.get('article_selectors', []):
+            try:
+                for a in soup.select(selector):
+                    href = a.get('href')
+                    if href:
+                        full_url = urljoin(base_url, href)
+                        if self._is_valid_article(full_url, base_url):
+                            links.add(full_url)
+            except:
+                continue
+        
+        # بحث عام
+        if len(links) < 5:
+            for a in soup.find_all('a', href=True):
+                full_url = urljoin(base_url, a['href'])
+                if self._is_valid_article(full_url, base_url) and self._looks_like_article(full_url):
+                    links.add(full_url)
+        
+        return list(links)
+    
+    def _is_valid_article(self, url: str, base_url: str) -> bool:
+        if not url.startswith('http'):
             return False
-        normalized = title.lower().strip()
-        return normalized in self.processed_titles
-    
-    def save_news_items(self, news_list: List[Dict]) -> int:
-        """
-        حفظ الأخبار في قاعدة البيانات
         
-        Returns:
-            int: عدد الأخبار المحفوظة
-        """
-        return save_news_batch(news_list)
+        base_domain = get_domain(base_url)
+        url_domain = get_domain(url)
+        if base_domain not in url_domain and url_domain not in base_domain:
+            return False
+        
+        for pattern in IGNORE_PATTERNS:
+            if re.search(pattern, url, re.IGNORECASE):
+                return False
+        
+        return True
+    
+    def _looks_like_article(self, url: str) -> bool:
+        for pattern in ARTICLE_PATTERNS:
+            if re.search(pattern, url):
+                return True
+        path = urlparse(url).path
+        return len(path) > 20 and path.count('/') >= 2
+    
+    def _fetch_article(self, url: str, config: Dict) -> Optional[Dict]:
+        try:
+            response = requests.get(url, headers=self.headers, timeout=self.timeout, verify=False)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # العنوان
+            title = ""
+            for selector in config.get('title_selectors', ['h1']):
+                elem = soup.select_one(selector)
+                if elem:
+                    title = elem.get_text(strip=True)
+                    break
+            if not title:
+                h1 = soup.find('h1')
+                title = h1.get_text(strip=True) if h1 else ""
+            
+            # المحتوى
+            content = ""
+            for selector in config.get('content_selectors', ['article']):
+                elem = soup.select_one(selector)
+                if elem:
+                    for tag in elem.find_all(['script', 'style', 'nav', 'aside']):
+                        tag.decompose()
+                    content = elem.get_text(separator='\n', strip=True)
+                    if len(content) > 100:
+                        break
+            
+            if not content:
+                paragraphs = soup.find_all('p')
+                content = '\n'.join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 50)
+            
+            # الصورة
+            image = ""
+            og = soup.find('meta', property='og:image')
+            if og:
+                image = og.get('content', '')
+            
+            # التاريخ
+            pub_date = None
+            meta_date = soup.find('meta', property='article:published_time')
+            if meta_date:
+                try:
+                    pub_date = date_parser.parse(meta_date['content'])
+                except:
+                    pass
+            
+            return {
+                "title": title,
+                "content": content,
+                "image": image,
+                "date": pub_date
+            }
+            
+        except Exception as e:
+            print(f"      ⚠️ Error: {e}")
+            return None
+    
+    def _classify(self, title: str, content: str) -> tuple:
+        if CLASSIFIER_AVAILABLE:
+            try:
+                cat, tags, _, _ = classify_with_gemini(title, content)
+                return cat, tags
+            except:
+                pass
+        return "أخرى", ""
+
+
+# ============================================
+# 🚀 Main Entry Point
+# ============================================
+
+def scrape_url(
+    url: str,
+    save_to_db: bool = True,
+    max_articles: int = 10,
+    language_id: int = 1
+) -> ScrapeResult:
+    """
+    🎯 الدالة الرئيسية لسحب الأخبار
+    
+    تكتشف نوع المصدر تلقائياً (RSS/Web) وتسحب الأخبار
+    
+    Args:
+        url: الرابط المراد سحبه
+        save_to_db: حفظ في Database
+        max_articles: الحد الأقصى للأخبار
+        language_id: ID اللغة
+    
+    Returns:
+        ScrapeResult: نتيجة السحب
+    
+    Example:
+        result = scrape_url("https://aljazeera.net/rss")
+        print(f"Saved: {result.saved}")
+    """
+    start_time = time.time()
+    
+    print(f"\n{'='*60}")
+    print(f"📥 News Scraper")
+    print(f"{'='*60}")
+    print(f"🔗 URL: {url}")
+    
+    # تنظيف الرابط
+    url = url.strip()
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+    
+    # اكتشاف النوع
+    source_type = detect_source_type(url)
+    domain = get_domain(url)
+    
+    print(f"🏷️ Type: {source_type.value}")
+    print(f"📍 Domain: {domain}")
+    
+    # الحصول على source_type_id من Database
+    source_type_id = get_source_type_id(source_type.value)
+    
+    # إنشاء/جلب المصدر
+    source_id = get_or_create_source(
+        source_url=url,
+        source_type_id=source_type_id,
+        source_name=domain
+    )
+    
+    print(f"📌 Source ID: {source_id}")
+    
+    # جلب آخر 100 خبر للـ Deduplication
+    existing_titles = get_recent_news_titles(source_id, limit=100)
+    print(f"📋 Existing: {len(existing_titles)} titles")
+    
+    # السحب حسب النوع
+    if source_type == SourceType.RSS:
+        scraper = RssScraper(language_id=language_id)
+        result = scraper.scrape(
+            feed_url=url,
+            source_id=source_id,
+            existing_titles=existing_titles,
+            max_items=max_articles,
+            save_to_db=save_to_db
+        )
+    else:
+        scraper = WebScraper(language_id=language_id, max_articles=max_articles)
+        result = scraper.scrape(
+            url=url,
+            source_id=source_id,
+            existing_titles=existing_titles,
+            save_to_db=save_to_db
+        )
+    
+    # تحديث last_fetched
+    if result.success and result.saved > 0:
+        update_source_last_fetched(source_id)
+    
+    result.time_seconds = time.time() - start_time
+    result.source_id = source_id
+    
+    # طباعة النتيجة
+    print(f"\n{'='*60}")
+    if result.success:
+        print(f"✅ SUCCESS in {result.time_seconds:.2f}s")
+    else:
+        print(f"❌ FAILED: {result.error}")
+    print(f"   📰 Extracted: {result.extracted}")
+    print(f"   💾 Saved: {result.saved}")
+    print(f"   ⏭️ Skipped: {result.skipped}")
+    print(f"{'='*60}\n")
+    
+    return result
+
+
+def scrape_urls(urls: List[str], **kwargs) -> List[ScrapeResult]:
+    """سحب عدة روابط"""
+    results = []
+    for i, url in enumerate(urls, 1):
+        print(f"\n📌 [{i}/{len(urls)}] {url}")
+        result = scrape_url(url, **kwargs)
+        results.append(result)
+        if i < len(urls):
+            time.sleep(3)
+    return results
+
+
+# ============================================
+# 🧪 Test
+# ============================================
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        url = sys.argv[1]
+        max_articles = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+        result = scrape_url(url, max_articles=max_articles)
+    else:
+        print("Usage: python scraper.py <URL> [max_articles]")
+        print("Example: python scraper.py https://aljazeera.net/rss 10")
