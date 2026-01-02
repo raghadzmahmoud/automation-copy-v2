@@ -20,7 +20,7 @@ import requests
 import feedparser
 import warnings
 from enum import Enum
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urljoin
@@ -151,12 +151,6 @@ class RssScraper:
             
             print(f"   ✅ Found {len(feed.entries)} entries")
 
-            # طباعة جميع الروابط الكاملة
-            for entry in feed.entries[:max_items]:
-                link = entry.get("link", "")
-                if link:
-                    print(f"   🔗 {link}")
-
             news_items = []
             saved_count = 0
             skipped_count = 0
@@ -190,7 +184,7 @@ class RssScraper:
                     "tags": tags_str,
                     "source_id": source_id,
                     "source_type_id": self.source_type_id,
-                    "source_url": link,  # ✅ رابط الخبر
+                    "source_url": link,
                     "language_id": self.language_id,
                     "category_id": category_id,
                     "input_method_id": self.input_method_id,
@@ -283,7 +277,7 @@ SITE_CONFIGS = {
     },
     'rt.com': {
         'dynamic': True,
-        'article_selectors': ['a[href*="/news/"]', '.card__heading a', 'article a'],
+        'article_selectors': ['a[href*="/world/"]', 'a[href*="/russia/"]', 'a[href*="/middle_east/"]', '.card__heading a'],
         'title_selectors': ['h1', '.article__heading'],
         'content_selectors': ['.article__text', '.text'],
     },
@@ -301,16 +295,36 @@ SITE_CONFIGS = {
     },
 }
 
+# ✅ أنماط روابط الأخبار
 ARTICLE_PATTERNS = [
-    r'/\d+-[^/]+/',  # نمط خاص للروابط مثل /1745080-عنوان-بالعربية/
+    r'/\d{5,}',              # ID طويل (5+ أرقام) مثل /1745080
+    r'/\d{4}/\d{2}/\d{2}/',  # تاريخ /2024/01/15/
+    r'/article/',
+    r'/news/\d',             # /news/ متبوع برقم
+    r'/story/',
+    r'/details/',
+    r'/Pages/Details/',
+    r'-\d{5,}',              # عنوان-1745080
 ]
 
+# ✅ روابط يجب تجاهلها
 IGNORE_PATTERNS = [
     r'^#', r'^javascript:', r'^mailto:',
     r'/tag/', r'/category/', r'/author/',
     r'/search', r'/login', r'/about',
-    r'\.(jpg|png|gif|pdf|mp4)$',
+    r'/privacy', r'/terms', r'/contact',
+    r'/page/\d+$',           # pagination
+    r'/live/?$',             # صفحات البث المباشر
+    r'/video/?$',            # صفحات الفيديو العامة
+    r'/photos?/?$',          # صفحات الصور
+    r'\.(jpg|png|gif|pdf|mp4|mp3)$',
+    r'^https?://[^/]+/?$',   # الصفحة الرئيسية فقط
 ]
+
+# ✅ الحدود الدنيا
+MIN_PATH_LENGTH = 25        # طول المسار
+MIN_ANCHOR_LENGTH = 15      # طول نص الرابط
+MIN_CONTENT_LENGTH = 100    # طول المحتوى
 
 
 class WebScraper:
@@ -363,50 +377,69 @@ class WebScraper:
                 error="Failed to fetch page"
             )
         
-        # استخراج روابط المقالات
+        # ✅ استخراج روابط المقالات مع النص المرتبط
         soup = BeautifulSoup(html, 'html.parser')
-        article_links = self._find_articles(soup, url, config)
-
-        # تصفية الروابط للحصول على مقالات فقط
-        filtered_links = [link for link in article_links if self._looks_like_article(link)]
-
-        print(f"   🔗 Found {len(filtered_links)} articles")
-
-        # طباعة جميع الروابط الكاملة المصفاة
-        for link in filtered_links:
-            print(f"   🔗 {link}")
-
-        if not filtered_links:
+        candidates = self._find_article_candidates(soup, url, config)
+        
+        print(f"   🔗 Found {len(candidates)} potential articles")
+        
+        if not candidates:
             return ScrapeResult(
                 success=False, url=url,
                 source_type=self.SOURCE_TYPE_NAME,
                 error="No articles found"
             )
         
+        # طباعة المرشحين
+        print(f"\n   📋 Candidates:")
+        for c in candidates[:self.max_articles]:
+            anchor_preview = c['anchor'][:40] + "..." if len(c['anchor']) > 40 else c['anchor']
+            print(f"      → {anchor_preview or '(no text)'}")
+        
         # سحب المقالات
         news_items = []
         saved_count = 0
         skipped_count = 0
-
-        for i, link in enumerate(filtered_links[:self.max_articles]):
-            print(f"   📰 [{i+1}/{min(len(article_links), self.max_articles)}] {link[:60]}...")
+        failed_count = 0
+        
+        for i, candidate in enumerate(candidates):
+            # توقف إذا وصلنا للحد المطلوب
+            if len(news_items) >= self.max_articles:
+                break
+            
+            link = candidate['url']
+            anchor = candidate['anchor']
+            
+            print(f"\n   📰 [{i+1}] Fetching: {link[:60]}...")
             
             article = self._fetch_article(link, config)
+            
+            # ✅ تحقق: هل نجح الجلب وهل هناك محتوى كافي؟
             if not article:
+                print(f"      ⚠️ Failed to fetch")
+                failed_count += 1
                 continue
             
             title = article.get("title", "").strip()
-            if not title:
+            content = article.get("content", "")
+            
+            if not title or len(title) < 10:
+                print(f"      ⚠️ No title, skip")
+                failed_count += 1
+                continue
+            
+            if len(content) < MIN_CONTENT_LENGTH:
+                print(f"      ⚠️ Content too short ({len(content)} chars), skip")
+                failed_count += 1
                 continue
             
             # Deduplication
             if title in existing_titles:
-                print(f"      ⏭️ Skip (exists)")
+                print(f"      ⏭️ Skip (exists): {title[:40]}...")
                 skipped_count += 1
                 continue
             
             # التصنيف
-            content = article.get("content", "")
             category, tags_str = self._classify(title, content)
             category_id = get_or_create_category_id(category)
             
@@ -418,7 +451,7 @@ class WebScraper:
                 "tags": tags_str,
                 "source_id": source_id,
                 "source_type_id": self.source_type_id,
-                "source_url": link,  # ✅ رابط الخبر
+                "source_url": link,
                 "language_id": self.language_id,
                 "category_id": category_id,
                 "input_method_id": self.input_method_id,
@@ -433,11 +466,16 @@ class WebScraper:
                 if save_news_item(news_item, existing_titles):
                     saved_count += 1
                     existing_titles.add(title)
-                    print(f"      ✅ Saved")
+                    print(f"      ✅ Saved: {title[:50]}...")
                 else:
                     skipped_count += 1
+                    print(f"      ⏭️ Skipped (DB)")
+            else:
+                print(f"      📝 {title[:50]}...")
             
             time.sleep(1)  # تأخير
+        
+        print(f"\n   📊 Summary: {len(news_items)} extracted, {failed_count} failed, {skipped_count} skipped")
         
         return ScrapeResult(
             success=len(news_items) > 0,
@@ -487,53 +525,120 @@ class WebScraper:
             print(f"   ⚠️ Playwright error: {e}")
             return self._fetch_requests(url)
     
-    def _find_articles(self, soup: BeautifulSoup, base_url: str, config: Dict) -> List[str]:
-        links = set()
+    def _find_article_candidates(self, soup: BeautifulSoup, base_url: str, config: Dict) -> List[Dict]:
+        """
+        ✅ البحث عن روابط المقالات مع النص المرتبط
         
-        # Selectors خاصة
+        Returns:
+            List of {'url': str, 'anchor': str, 'score': int}
+        """
+        candidates = []
+        seen_urls = set()
+        
+        # 1️⃣ Selectors خاصة بالموقع (أولوية عالية)
         for selector in config.get('article_selectors', []):
             try:
                 for a in soup.select(selector):
-                    href = a.get('href')
-                    if href:
-                        full_url = urljoin(base_url, href)
-                        if self._is_valid_article(full_url, base_url):
-                            links.add(full_url)
+                    result = self._evaluate_link(a, base_url, seen_urls, priority=10)
+                    if result:
+                        candidates.append(result)
+                        seen_urls.add(result['url'])
             except:
                 continue
         
-        # بحث عام
-        if len(links) < 5:
+        # 2️⃣ بحث عام إذا لم نجد كفاية
+        if len(candidates) < 10:
             for a in soup.find_all('a', href=True):
-                full_url = urljoin(base_url, a['href'])
-                if self._is_valid_article(full_url, base_url) and self._looks_like_article(full_url):
-                    links.add(full_url)
+                result = self._evaluate_link(a, base_url, seen_urls, priority=0)
+                if result:
+                    candidates.append(result)
+                    seen_urls.add(result['url'])
         
-        return list(links)
+        # ترتيب حسب الـ score
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        
+        return candidates
     
-    def _is_valid_article(self, url: str, base_url: str) -> bool:
+    def _evaluate_link(self, a_tag, base_url: str, seen_urls: Set[str], priority: int = 0) -> Optional[Dict]:
+        """
+        ✅ تقييم رابط واحد
+        
+        يعطي score بناءً على:
+        - طول المسار
+        - وجود ID طويل
+        - طول النص المرتبط
+        """
+        href = a_tag.get('href')
+        if not href:
+            return None
+        
+        full_url = urljoin(base_url, href)
+        
+        # تجاهل المكرر
+        if full_url in seen_urls:
+            return None
+        
+        # تحقق أساسي
+        if not self._is_valid_url(full_url, base_url):
+            return None
+        
+        # النص المرتبط
+        anchor_text = a_tag.get_text(strip=True)
+        
+        # حساب الـ score
+        score = priority
+        path = urlparse(full_url).path
+        
+        # ✅ أنماط معروفة للأخبار
+        for pattern in ARTICLE_PATTERNS:
+            if re.search(pattern, full_url):
+                score += 20
+                break
+        
+        # ✅ طول المسار (روابط الأخبار طويلة)
+        if len(path) > 100:
+            score += 15
+        elif len(path) > 50:
+            score += 10
+        elif len(path) > MIN_PATH_LENGTH:
+            score += 5
+        
+        # ✅ طول النص المرتبط (عنوان الخبر)
+        if len(anchor_text) > 40:
+            score += 15
+        elif len(anchor_text) > MIN_ANCHOR_LENGTH:
+            score += 10
+        
+        # الحد الأدنى للقبول
+        if score < 5:
+            return None
+        
+        return {
+            'url': full_url,
+            'anchor': anchor_text,
+            'score': score
+        }
+    
+    def _is_valid_url(self, url: str, base_url: str) -> bool:
+        """التحقق من صحة الرابط"""
         if not url.startswith('http'):
             return False
         
+        # نفس الدومين
         base_domain = get_domain(base_url)
         url_domain = get_domain(url)
         if base_domain not in url_domain and url_domain not in base_domain:
             return False
         
+        # تجاهل الأنماط غير المرغوبة
         for pattern in IGNORE_PATTERNS:
             if re.search(pattern, url, re.IGNORECASE):
                 return False
         
         return True
     
-    def _looks_like_article(self, url: str) -> bool:
-        for pattern in ARTICLE_PATTERNS:
-            if re.search(pattern, url):
-                return True
-        path = urlparse(url).path
-        return len(path) > 20 and path.count('/') >= 2
-    
     def _fetch_article(self, url: str, config: Dict) -> Optional[Dict]:
+        """جلب محتوى مقال"""
         try:
             response = requests.get(url, headers=self.headers, timeout=self.timeout, verify=False)
             response.raise_for_status()
@@ -558,10 +663,10 @@ class WebScraper:
                     for tag in elem.find_all(['script', 'style', 'nav', 'aside']):
                         tag.decompose()
                     content = elem.get_text(separator='\n', strip=True)
-                    if len(content) > 100:
+                    if len(content) > MIN_CONTENT_LENGTH:
                         break
             
-            if not content:
+            if not content or len(content) < MIN_CONTENT_LENGTH:
                 paragraphs = soup.find_all('p')
                 content = '\n'.join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 50)
             
@@ -588,7 +693,6 @@ class WebScraper:
             }
             
         except Exception as e:
-            print(f"      ⚠️ Error: {e}")
             return None
     
     def _classify(self, title: str, content: str) -> tuple:
@@ -613,21 +717,6 @@ def scrape_url(
 ) -> ScrapeResult:
     """
     🎯 الدالة الرئيسية لسحب الأخبار
-    
-    تكتشف نوع المصدر تلقائياً (RSS/Web) وتسحب الأخبار
-    
-    Args:
-        url: الرابط المراد سحبه
-        save_to_db: حفظ في Database
-        max_articles: الحد الأقصى للأخبار
-        language_id: ID اللغة
-    
-    Returns:
-        ScrapeResult: نتيجة السحب
-    
-    Example:
-        result = scrape_url("https://aljazeera.net/rss")
-        print(f"Saved: {result.saved}")
     """
     start_time = time.time()
     
@@ -726,7 +815,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         url = sys.argv[1]
         max_articles = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-        result = scrape_url(url, max_articles=max_articles)
+        result = scrape_url(url, max_articles=max_articles, save_to_db=False)
     else:
         print("Usage: python scraper.py <URL> [max_articles]")
-        print("Example: python scraper.py https://aljazeera.net/rss 10")
+        print("Example: python scraper.py https://arabic.rt.com 5")
