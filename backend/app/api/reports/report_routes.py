@@ -158,7 +158,7 @@ async def list_reports(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{report_id}", response_model=ReportItem)
+@router.get("/{report_id:int}", response_model=ReportItem)
 async def get_report(report_id: int):
     """Get single report by ID"""
     try:
@@ -326,7 +326,7 @@ async def get_draft_reports(
     )
 
 
-@router.patch("/{report_id}/publish")
+@router.patch("/{report_id:int}/publish")
 async def publish_report(report_id: int):
     """Publish a report"""
     try:
@@ -370,7 +370,7 @@ async def publish_report(report_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/{report_id}/archive")
+@router.patch("/{report_id:int}/archive")
 async def archive_report(report_id: int):
     """Archive a report"""
     try:
@@ -428,7 +428,7 @@ async def trigger_report_generation(background_tasks: BackgroundTasks):
     }
 
 
-@router.get("/reports/{report_id}/raw-news-images")
+@router.get("/reports/{report_id:int}/raw-news-images")
 async def get_report_images(report_id: int):
     """Get all images from raw news in this report"""
     try:
@@ -455,7 +455,7 @@ async def get_report_images(report_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
     
-@router.get("/reports/{report_id}/{content_type_id}")
+@router.get("/reports/{report_id:int}/{content_type_id}")
 def get_report_with_content(report_id: int, content_type_id: int):
     """Get report with its generated content by type"""
     try:
