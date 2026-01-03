@@ -56,6 +56,34 @@ logger = logging.getLogger(__name__)
 # DATABASE
 # =============================================================================
 
+def is_processing_pipeline_running() -> bool:
+    """
+    تحقق إذا في processing pipeline شغال حاليًا
+    """
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # تحقق إذا في processing_pipeline شغال من آخر 30 دقيقة
+        cursor.execute("""
+            SELECT COUNT(*) FROM scheduled_task_logs stl
+            JOIN scheduled_tasks st ON stl.scheduled_task_id = st.id
+            WHERE st.task_type = 'processing_pipeline'
+            AND stl.executed_at >= NOW() - INTERVAL '30 minutes'
+            AND stl.status = 'running'
+        """)
+        
+        running_count = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        
+        return running_count > 0
+        
+    except Exception as e:
+        logger.error(f"Error checking pipeline status: {e}")
+        return False
+
+
 def get_active_sources():
     """
     Get all active sources ready for scraping
@@ -120,6 +148,12 @@ def scrape_news() -> dict:
     # Check if enabled
     if not user_config.scraping_enabled:
         logger.info("⏭️ Scraping is disabled in configuration")
+        return {'total': 0, 'success': 0, 'failed': 0, 'news_saved': 0, 'skipped': True}
+
+    # ✅ Check if processing pipeline is running
+    if is_processing_pipeline_running():
+        logger.info("⏭️ Processing pipeline is running, skipping scraping to avoid conflicts")
+        logger.info("=" * 60)
         return {'total': 0, 'success': 0, 'failed': 0, 'news_saved': 0, 'skipped': True}
 
     # Get sources ready for scraping

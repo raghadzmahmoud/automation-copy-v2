@@ -44,6 +44,11 @@ def register_default_tasks():
         from app.jobs.scraper_job import scrape_news
         scrape_news()
     
+    def processing_pipeline_task():
+        from app.jobs.processing_pipeline_job import run_processing_pipeline
+        run_processing_pipeline()
+    
+    # Individual tasks (for manual triggers only)
     def clustering_task():
         from app.jobs.clustering_job import cluster_news
         cluster_news()
@@ -64,7 +69,11 @@ def register_default_tasks():
         from app.jobs.audio_generation_job import generate_audio
         generate_audio()
     
+    # Register main tasks
     register_task('scraping', scraping_task)
+    register_task('processing_pipeline', processing_pipeline_task)
+    
+    # Register individual tasks (for manual execution)
     register_task('clustering', clustering_task)
     register_task('report_generation', report_generation_task)
     register_task('social_media_generation', social_media_task)
