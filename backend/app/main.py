@@ -4,7 +4,8 @@
 🚀 AI Media Center - FastAPI Application
 Main application entry point - API Only
 """
-
+import certifi, os
+os.environ["SSL_CERT_FILE"] = certifi.where()
 import os
 import logging
 from datetime import datetime
