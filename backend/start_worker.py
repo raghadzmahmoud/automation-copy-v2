@@ -1,17 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-⏰ Database-Driven Background Task Scheduler with Job Chaining
-كل job لما يخلص يشغّل اللي بعده
+⏰ Database-Driven Task Scheduler
+الـ Database هي المتحكم الأساسي - كل job له schedule خاص فيه
 """
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import psycopg2
 import logging
-import threading
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Callable
+from typing import Dict, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from settings import DB_CONFIG
@@ -21,31 +20,16 @@ logger = logging.getLogger(__name__)
 # Global scheduler instance
 scheduler = BackgroundScheduler()
 
-# Thread pool for parallel jobs
-parallel_executor = ThreadPoolExecutor(max_workers=3)
+# Thread pool for parallel execution
+executor = ThreadPoolExecutor(max_workers=5)
 
 # Mapping task_type to actual function
 TASK_FUNCTIONS: Dict[str, Callable] = {}
 
 
 # ============================================
-# 🔗 Job Chain Definition
+# 📝 Task Registration
 # ============================================
-
-# Core pipeline: Scraping → Clustering → Reports → Parallel Generation
-PIPELINE_CHAIN = [
-    'scraping',
-    'clustering', 
-    'report_generation',
-]
-
-# These run in parallel after the pipeline
-PARALLEL_JOBS = [
-    'social_media_generation',
-    'image_generation',
-    'audio_generation',
-]
-
 
 def register_task(task_type: str, func: Callable):
     """Register a task function"""
@@ -53,186 +37,8 @@ def register_task(task_type: str, func: Callable):
     logger.info(f"📝 Registered task: {task_type}")
 
 
-# ============================================
-# 🗄️ Database Functions
-# ============================================
-
-def get_db_connection():
-    """Create database connection"""
-    try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        return conn
-    except Exception as e:
-        logger.error(f"❌ Database connection failed: {e}")
-        return None
-
-
-def get_task_by_type(task_type: str) -> Optional[Dict]:
-    """Get task info from database by task_type"""
-    conn = get_db_connection()
-    if not conn:
-        return None
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, name, task_type, schedule_pattern, status
-            FROM scheduled_tasks
-            WHERE task_type = %s AND status = 'active'
-            LIMIT 1
-        """, (task_type,))
-        
-        row = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        
-        if row:
-            return {
-                'id': row[0],
-                'name': row[1],
-                'task_type': row[2],
-                'schedule_pattern': row[3],
-                'status': row[4]
-            }
-        return None
-        
-    except Exception as e:
-        logger.error(f"❌ Error fetching task: {e}")
-        if conn:
-            conn.close()
-        return None
-
-
-def get_scraping_task() -> Optional[Dict]:
-    """Get scraping task (the only scheduled one)"""
-    return get_task_by_type('scraping')
-
-
-def update_task_run_times(task_type: str, last_run: datetime, next_run: Optional[datetime] = None):
-    """Update run times in database"""
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    try:
-        cursor = conn.cursor()
-        
-        if next_run:
-            cursor.execute("""
-                UPDATE scheduled_tasks 
-                SET last_run_at = %s, next_run_at = %s
-                WHERE task_type = %s
-            """, (last_run, next_run, task_type))
-        else:
-            cursor.execute("""
-                UPDATE scheduled_tasks 
-                SET last_run_at = %s, next_run_at = NULL
-                WHERE task_type = %s
-            """, (last_run, task_type))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-    except Exception as e:
-        logger.error(f"❌ Error updating task run times: {e}")
-        if conn:
-            conn.rollback()
-            conn.close()
-
-
-# ============================================
-# 🔗 Job Chaining Logic
-# ============================================
-
-def execute_job(task_type: str) -> bool:
-    """
-    Execute a single job
-    
-    Returns:
-        bool: True if successful
-    """
-    job_func = TASK_FUNCTIONS.get(task_type)
-    
-    if not job_func:
-        logger.error(f"❌ No function registered for: {task_type}")
-        return False
-    
-    task = get_task_by_type(task_type)
-    job_name = task['name'] if task else task_type
-    
-    logger.info(f"▶️ Starting {job_name}...")
-    start_time = datetime.now(timezone.utc)
-    
-    try:
-        job_func()
-        logger.info(f"✅ {job_name} completed")
-        update_task_run_times(task_type, start_time)
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ {job_name} failed: {e}")
-        import traceback
-        traceback.print_exc()
-        update_task_run_times(task_type, start_time)
-        return False
-
-
-def run_parallel_jobs():
-    """Run generation jobs in parallel"""
-    logger.info("🚀 Starting parallel generation jobs...")
-    
-    futures = []
-    for task_type in PARALLEL_JOBS:
-        if task_type in TASK_FUNCTIONS:
-            future = parallel_executor.submit(execute_job, task_type)
-            futures.append((task_type, future))
-    
-    # Wait for all to complete
-    for task_type, future in futures:
-        try:
-            future.result()
-        except Exception as e:
-            logger.error(f"❌ Parallel job {task_type} error: {e}")
-    
-    logger.info("✅ All parallel jobs completed")
-
-
-def run_pipeline():
-    """
-    🔗 Run the complete pipeline with chaining
-    
-    Scraping → Clustering → Reports → (Social + Images + Audio)
-    """
-    logger.info("=" * 60)
-    logger.info("🔗 Starting Pipeline...")
-    logger.info("=" * 60)
-    
-    # Run core pipeline sequentially
-    for task_type in PIPELINE_CHAIN:
-        success = execute_job(task_type)
-        
-        if not success:
-            logger.warning(f"⚠️ {task_type} failed, but continuing pipeline...")
-        
-        # Small delay between jobs
-        import time
-        time.sleep(1)
-    
-    # Run generation jobs in parallel
-    run_parallel_jobs()
-    
-    logger.info("=" * 60)
-    logger.info("✅ Pipeline completed!")
-    logger.info("=" * 60)
-
-
-# ============================================
-# 📋 Task Registration
-# ============================================
-
 def register_default_tasks():
-    """Register default task functions"""
+    """Register all task functions"""
     
     def scraping_task():
         from app.jobs.scraper_job import scrape_news
@@ -246,7 +52,7 @@ def register_default_tasks():
         from app.jobs.reports_job import generate_reports
         generate_reports()
     
-    def social_media_generation_task():
+    def social_media_task():
         from app.jobs.social_media_job import generate_social_media_content
         generate_social_media_content()
     
@@ -258,25 +64,185 @@ def register_default_tasks():
         from app.jobs.audio_generation_job import generate_audio
         generate_audio()
     
-    # Register all tasks
     register_task('scraping', scraping_task)
     register_task('clustering', clustering_task)
     register_task('report_generation', report_generation_task)
-    register_task('social_media_generation', social_media_generation_task)
+    register_task('social_media_generation', social_media_task)
     register_task('image_generation', image_generation_task)
     register_task('audio_generation', audio_generation_task)
 
 
 # ============================================
-# ⏰ Scheduler Functions
+# 🗄️ Database Functions
+# ============================================
+
+def get_db_connection():
+    """Create database connection"""
+    try:
+        return psycopg2.connect(**DB_CONFIG)
+    except Exception as e:
+        logger.error(f"❌ Database connection failed: {e}")
+        return None
+
+
+def get_all_active_tasks() -> list:
+    """
+    Get all active tasks from database
+    Returns: List of task dicts with schedule_pattern
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, task_type, schedule_pattern, status
+            FROM scheduled_tasks
+            WHERE status = 'active'
+            ORDER BY id
+        """)
+        
+        tasks = []
+        for row in cursor.fetchall():
+            tasks.append({
+                'id': row[0],
+                'name': row[1],
+                'task_type': row[2],
+                'schedule_pattern': row[3],
+                'status': row[4]
+            })
+        
+        cursor.close()
+        conn.close()
+        return tasks
+        
+    except Exception as e:
+        logger.error(f"❌ Error fetching tasks: {e}")
+        if conn:
+            conn.close()
+        return []
+
+
+def update_task_last_run(task_type: str):
+    """Update last_run_at for a task"""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE scheduled_tasks 
+            SET last_run_at = %s
+            WHERE task_type = %s
+        """, (datetime.now(timezone.utc), task_type))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating last_run: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+
+
+def log_task_execution(task_type: str, status: str, duration: float = 0, error: str = None):
+    """Log task execution to scheduled_task_logs"""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Get task_id
+        cursor.execute(
+            "SELECT id FROM scheduled_tasks WHERE task_type = %s",
+            (task_type,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return
+        
+        cursor.execute("""
+            INSERT INTO scheduled_task_logs 
+            (scheduled_task_id, status, execution_time_seconds, error_message, executed_at)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (row[0], status, duration, error, datetime.now()))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"❌ Error logging execution: {e}")
+        if conn:
+            conn.close()
+
+
+# ============================================
+# ⚙️ Job Execution
+# ============================================
+
+def execute_task(task_type: str):
+    """
+    Execute a single task
+    """
+    job_func = TASK_FUNCTIONS.get(task_type)
+    
+    if not job_func:
+        logger.error(f"❌ No function registered for: {task_type}")
+        return
+    
+    logger.info(f"▶️ Starting: {task_type}")
+    start_time = datetime.now()
+    
+    try:
+        job_func()
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        logger.info(f"✅ {task_type} completed in {duration:.2f}s")
+        
+        update_task_last_run(task_type)
+        log_task_execution(task_type, 'completed', duration)
+        
+    except Exception as e:
+        duration = (datetime.now() - start_time).total_seconds()
+        logger.error(f"❌ {task_type} failed: {e}")
+        
+        import traceback
+        traceback.print_exc()
+        
+        log_task_execution(task_type, 'failed', duration, str(e))
+
+
+def create_job_wrapper(task_type: str):
+    """Create a wrapper function for a task"""
+    def wrapper():
+        execute_task(task_type)
+    return wrapper
+
+
+# ============================================
+# ⏰ Cron Pattern Parser
 # ============================================
 
 def parse_cron_pattern(pattern: str) -> Dict:
-    """Parse cron pattern to APScheduler CronTrigger args"""
+    """
+    Parse cron pattern to APScheduler CronTrigger args
+    Format: minute hour day month day_of_week
+    Examples:
+        "0 * * * *"     = every hour at :00
+        "*/30 * * * *"  = every 30 minutes
+        "0 */2 * * *"   = every 2 hours
+    """
     parts = pattern.strip().split()
     
     if len(parts) != 5:
-        logger.warning(f"⚠️ Invalid cron pattern: {pattern}, using default */10")
+        logger.warning(f"⚠️ Invalid cron: {pattern}, using */10")
         return {'minute': '*/10'}
     
     return {
@@ -288,45 +254,69 @@ def parse_cron_pattern(pattern: str) -> Dict:
     }
 
 
-def start_scheduler(run_initial: bool = True):
-    """Start the background scheduler"""
+# ============================================
+# 🚀 Scheduler Control
+# ============================================
+
+def start_scheduler(run_initial: bool = False):
+    """
+    Start scheduler - reads ALL tasks from DB and schedules each one
+    """
     try:
         # Register task functions
         register_default_tasks()
         
-        # Get scraping schedule from database
-        scraping_task = get_scraping_task()
+        # Get all active tasks from database
+        tasks = get_all_active_tasks()
         
-        if scraping_task:
-            cron_args = parse_cron_pattern(scraping_task['schedule_pattern'])
-        else:
-            # Default: every 10 minutes
-            cron_args = {'minute': '*/10'}
-            logger.warning("⚠️ No scraping task in DB, using default: */10 * * * *")
+        if not tasks:
+            logger.warning("⚠️ No active tasks found in database!")
+            return
         
-        # Schedule ONLY the pipeline trigger (scraping schedule)
-        scheduler.add_job(
-            run_pipeline,
-            trigger=CronTrigger(**cron_args),
-            id='pipeline_trigger',
-            name='Pipeline Trigger',
-            replace_existing=True
-        )
+        logger.info("=" * 60)
+        logger.info("📋 Loading tasks from database...")
+        logger.info("=" * 60)
+        
+        # Schedule each task with its own cron pattern
+        for task in tasks:
+            task_type = task['task_type']
+            schedule = task['schedule_pattern']
+            name = task['name']
+            
+            if task_type not in TASK_FUNCTIONS:
+                logger.warning(f"⚠️ Unknown task_type: {task_type}, skipping")
+                continue
+            
+            cron_args = parse_cron_pattern(schedule)
+            
+            scheduler.add_job(
+                create_job_wrapper(task_type),
+                trigger=CronTrigger(**cron_args),
+                id=task_type,
+                name=name,
+                replace_existing=True
+            )
+            
+            logger.info(f"   ✅ {name} ({task_type}): {schedule}")
         
         # Start scheduler
         scheduler.start()
         
         logger.info("=" * 60)
-        logger.info("⏰ Scheduler started with Job Chaining")
-        logger.info("=" * 60)
-        logger.info("🔗 Pipeline: Scraping → Clustering → Reports → Generation")
-        logger.info(f"⏱️ Schedule: {scraping_task['schedule_pattern'] if scraping_task else '*/10 * * * *'}")
+        logger.info("⏰ Scheduler started!")
         logger.info("=" * 60)
         
-        # Run initial pipeline if requested
+        # Show next run times
+        for job in scheduler.get_jobs():
+            next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M:%S") if job.next_run_time else "N/A"
+            logger.info(f"   📅 {job.name}: next run at {next_run}")
+        
+        logger.info("=" * 60)
+        
+        # Run initial tasks if requested
         if run_initial:
-            logger.info("🚀 Running initial pipeline...")
-            run_pipeline()
+            logger.info("🚀 Running initial scraping...")
+            execute_task('scraping')
             
     except Exception as e:
         logger.error(f"❌ Failed to start scheduler: {e}")
@@ -334,18 +324,54 @@ def start_scheduler(run_initial: bool = True):
 
 
 def stop_scheduler():
-    """Stop the background scheduler"""
+    """Stop the scheduler"""
     try:
         if scheduler.running:
             scheduler.shutdown()
-            parallel_executor.shutdown(wait=True)
+            executor.shutdown(wait=True)
             logger.info("⏰ Scheduler stopped")
     except Exception as e:
         logger.error(f"❌ Error stopping scheduler: {e}")
 
 
+def reload_schedules():
+    """
+    Reload schedules from database (call this after DB changes)
+    """
+    logger.info("🔄 Reloading schedules from database...")
+    
+    # Remove all existing jobs
+    for job in scheduler.get_jobs():
+        job.remove()
+    
+    # Get fresh tasks from DB
+    tasks = get_all_active_tasks()
+    
+    for task in tasks:
+        task_type = task['task_type']
+        schedule = task['schedule_pattern']
+        name = task['name']
+        
+        if task_type not in TASK_FUNCTIONS:
+            continue
+        
+        cron_args = parse_cron_pattern(schedule)
+        
+        scheduler.add_job(
+            create_job_wrapper(task_type),
+            trigger=CronTrigger(**cron_args),
+            id=task_type,
+            name=name,
+            replace_existing=True
+        )
+        
+        logger.info(f"   ✅ Reloaded: {name} ({schedule})")
+    
+    logger.info("🔄 Reload complete!")
+
+
 def get_scheduler_status() -> Dict:
-    """Get scheduler status"""
+    """Get current scheduler status"""
     if not scheduler.running:
         return {"status": "stopped", "jobs": []}
     
@@ -360,7 +386,6 @@ def get_scheduler_status() -> Dict:
     
     return {
         "status": "running",
-        "pipeline": "Scraping → Clustering → Reports → (Social + Images + Audio)",
         "jobs": jobs_info
     }
 
@@ -369,26 +394,23 @@ def get_scheduler_status() -> Dict:
 # 🔧 Manual Triggers
 # ============================================
 
-def run_job_now(task_type: str) -> bool:
-    """Manually trigger a specific job"""
+def run_task_now(task_type: str) -> bool:
+    """Manually trigger a specific task"""
     if task_type not in TASK_FUNCTIONS:
         logger.error(f"❌ Unknown task_type: {task_type}")
         return False
     
     logger.info(f"🔧 Manually triggering: {task_type}")
-    return execute_job(task_type)
+    executor.submit(execute_task, task_type)
+    return True
 
 
-def run_pipeline_now():
-    """Manually trigger the full pipeline"""
-    logger.info("🔧 Manually triggering full pipeline...")
-    run_pipeline()
-
-
-def run_only_scraping():
-    """Run only scraping (without chaining)"""
-    logger.info("🔧 Running only scraping...")
-    return execute_job('scraping')
+def run_all_tasks_now():
+    """Manually trigger all tasks"""
+    logger.info("🔧 Manually triggering all tasks...")
+    tasks = get_all_active_tasks()
+    for task in tasks:
+        executor.submit(execute_task, task['task_type'])
 
 
 # ============================================
@@ -403,8 +425,8 @@ if __name__ == "__main__":
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    logger.info("🚀 Starting Job Chaining Scheduler")
-    start_scheduler(run_initial=True)
+    logger.info("🚀 Starting Database-Driven Scheduler")
+    start_scheduler(run_initial=False)
     
     try:
         while True:
