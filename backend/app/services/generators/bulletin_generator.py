@@ -9,8 +9,10 @@
 - تقسيم الأخبار حسب الأقسام (محلياً، دولياً، شؤون الأسرى...)
 - Structure يتبع الأمثلة الحقيقية
 - أبرز 3 عناوين بناءً على الأولويات
+- INSERT جديد فقط عند وجود أخبار جديدة
 """
-
+import certifi, os
+os.environ["SSL_CERT_FILE"] = certifi.where()
 import os
 import json
 import re
@@ -39,25 +41,19 @@ DB_CONFIG = {
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
 
-# أقسام النشرة بالترتيب (الترتيب مهم - الأولوية للأخص)
+# أقسام النشرة بالترتيب
 BULLETIN_SECTIONS = [
-    # فلسطين أولاً
     {'key': 'gaza', 'name': 'في غزة', 'keywords': ['غزة', 'القطاع', 'حماس', 'خان يونس', 'رفح', 'جباليا', 'الشجاعية', 'النصيرات', 'المغازي', 'دير البلح']},
     {'key': 'jerusalem', 'name': 'في القدس', 'keywords': ['القدس', 'الأقصى', 'المسجد الأقصى', 'باب العامود', 'سلوان', 'الشيخ جراح']},
     {'key': 'westbank', 'name': 'في الضفة الغربية', 'keywords': ['الضفة الغربية', 'نابلس', 'جنين', 'الخليل', 'رام الله', 'بيت لحم', 'طولكرم', 'قلقيلية', 'سلفيت', 'أريحا', 'طوباس']},
     {'key': 'prisoners', 'name': 'في شؤون الأسرى', 'keywords': ['أسرى', 'أسير', 'معتقل', 'سجن', 'محرر', 'النقب', 'عوفر', 'مجدو']},
     {'key': 'local', 'name': 'محلياً', 'keywords': ['السلطة الفلسطينية', 'الحكومة الفلسطينية', 'وزارة فلسطينية', 'فلسطيني', 'فلسطينية']},
-    
-    # دولي وعربي (الدولي قبل العربي لأن إيران/تركيا دولي)
     {'key': 'international', 'name': 'دولياً', 'keywords': ['أمريكا', 'أمريكي', 'واشنطن', 'البيت الأبيض', 'روسيا', 'روسي', 'موسكو', 'الصين', 'صيني', 'بكين', 'أوروبا', 'أوروبي', 'الاتحاد الأوروبي', 'بريطانيا', 'فرنسا', 'ألمانيا', 'الأمم المتحدة', 'مجلس الأمن', 'إيران', 'إيراني', 'طهران', 'تركيا', 'تركي', 'أنقرة', 'إسرائيل', 'إسرائيلي', 'تل أبيب', 'الكنيست', 'نتنياهو']},
     {'key': 'arab', 'name': 'عربياً', 'keywords': ['مصر', 'مصري', 'القاهرة', 'الأردن', 'أردني', 'عمان', 'السعودية', 'سعودي', 'الرياض', 'الإمارات', 'إماراتي', 'أبوظبي', 'دبي', 'قطر', 'قطري', 'الدوحة', 'لبنان', 'لبناني', 'بيروت', 'سوريا', 'سوري', 'دمشق', 'العراق', 'عراقي', 'بغداد', 'اليمن', 'يمني', 'صنعاء', 'الكويت', 'البحرين', 'عمان', 'المغرب', 'الجزائر', 'تونس', 'ليبيا', 'السودان']},
-    
-    # رياضة ومنوعات
     {'key': 'sports', 'name': 'رياضياً', 'keywords': ['رياضة', 'رياضي', 'كرة القدم', 'مباراة', 'دوري', 'منتخب', 'لاعب', 'مدرب', 'بطولة', 'كأس', 'أولمبياد']},
     {'key': 'other', 'name': '', 'keywords': []}
 ]
 
-# أولويات العناوين البارزة
 HEADLINE_PRIORITIES = [
     ('غزة', 1), ('شهيد', 1), ('شهداء', 1), ('استشهاد', 1), ('مجزرة', 1),
     ('اغتيال', 2), ('قصف', 2), ('عدوان', 2), ('غارة', 2),
@@ -69,10 +65,6 @@ HEADLINE_PRIORITIES = [
 
 DEFAULT_CURRENCY = {'USD': 3.65, 'JOD': 5.15, 'EUR': 3.95}
 
-
-# ============================================
-# Data Classes
-# ============================================
 
 @dataclass
 class ReportItem:
@@ -92,11 +84,8 @@ class BulletinResult:
     news_count: int = 0
     word_count: int = 0
     duration_seconds: int = 0
+    skipped: bool = False
 
-
-# ============================================
-# Bulletin Generator Class
-# ============================================
 
 class BulletinGenerator:
     
@@ -116,7 +105,6 @@ class BulletinGenerator:
         custom_weather: str = None,
         custom_currency: Dict[str, float] = None
     ) -> BulletinResult:
-        """توليد نشرة إخبارية كاملة"""
         
         print("\n" + "="*70)
         print(f"📻 توليد نشرة {bulletin_type}")
@@ -134,24 +122,33 @@ class BulletinGenerator:
         
         print(f"   ✅ تم جلب {len(reports)} تقرير")
         
-        # 2. تصنيف التقارير حسب الأقسام وحساب الأولوية
+        # ═══════════════════════════════════════════════════════════
+        # 🔍 فحص التغيير قبل المتابعة
+        # ═══════════════════════════════════════════════════════════
+        current_report_ids = sorted([r.id for r in reports])
+        
+        skip_result = self._check_if_should_skip(bulletin_type, current_report_ids)
+        if skip_result:
+            return skip_result
+        
+        # 2. تصنيف التقارير
         print("\n📂 Step 2: تصنيف التقارير...")
         reports = self._classify_reports(reports)
         print(f"   ✅ تم تصنيف التقارير")
         
-        # 3. إعادة كتابة كل تقرير للنشرة (فقرة كاملة)
+        # 3. إعادة صياغة
         print("\n📝 Step 3: إعادة صياغة التقارير للنشرة...")
         reports = self._rewrite_reports_for_bulletin(reports)
         print(f"   ✅ تم إعادة صياغة {len(reports)} تقرير")
         
-        # 4. اختيار أبرز 3 عناوين
+        # 4. اختيار أبرز العناوين
         print("\n🎯 Step 4: اختيار أبرز العناوين...")
         top_headlines = self._select_top_headlines(reports)
         print(f"   ✅ العناوين البارزة:")
         for i, h in enumerate(top_headlines, 1):
             print(f"      {i}. {h['title'][:60]}...")
         
-        # 5. بناء النشرة الكاملة
+        # 5. بناء النشرة
         print("\n📄 Step 5: بناء النشرة...")
         currency = custom_currency or DEFAULT_CURRENCY
         weather = custom_weather or self._get_default_weather()
@@ -169,7 +166,7 @@ class BulletinGenerator:
         
         print(f"   ✅ النشرة جاهزة: {word_count} كلمة، {duration_seconds//60} دقيقة")
         
-        # 6. حفظ في DB
+        # 6. حفظ
         print("\n💾 Step 6: حفظ النشرة...")
         result = self._save_bulletin(
             bulletin_type=bulletin_type,
@@ -180,7 +177,8 @@ class BulletinGenerator:
             currency=currency,
             weather=weather,
             word_count=word_count,
-            duration_seconds=duration_seconds
+            duration_seconds=duration_seconds,
+            report_ids=current_report_ids
         )
         
         if result.success:
@@ -189,9 +187,43 @@ class BulletinGenerator:
         return result
     
     
-    # ==========================================
-    # Step 1: جلب التقارير
-    # ==========================================
+    def _check_if_should_skip(self, bulletin_type: str, current_report_ids: List[int]) -> Optional[BulletinResult]:
+        """فحص إذا كانت الأخبار نفسها"""
+        
+        try:
+            self.cursor.execute("""
+                SELECT id, content->'report_ids' as report_ids
+                FROM news_bulletins
+                WHERE broadcast_date = %s AND bulletin_type = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (date.today(), bulletin_type))
+            
+            last_bulletin = self.cursor.fetchone()
+            
+            if last_bulletin:
+                last_report_ids = last_bulletin[1] if last_bulletin[1] else []
+                
+                if isinstance(last_report_ids, str):
+                    last_report_ids = json.loads(last_report_ids)
+                
+                if sorted(last_report_ids) == current_report_ids:
+                    print(f"   ⏭️ نفس الأخبار ({len(current_report_ids)} تقرير) - SKIP")
+                    return BulletinResult(
+                        success=True,
+                        bulletin_id=last_bulletin[0],
+                        message=f"⏭️ SKIP - النشرة موجودة (ID: {last_bulletin[0]})",
+                        skipped=True
+                    )
+                else:
+                    new_ids = set(current_report_ids) - set(last_report_ids)
+                    print(f"   🆕 {len(new_ids)} تقرير جديد - سيتم إنشاء نشرة جديدة")
+        
+        except Exception as e:
+            print(f"   ⚠️ خطأ في فحص التغيير: {e}")
+        
+        return None
+    
     
     def _fetch_recent_reports(self, limit: int, hours_back: int) -> List[ReportItem]:
         query = """
@@ -217,22 +249,13 @@ class BulletinGenerator:
         return [ReportItem(id=r[0], title=r[1], content=r[2]) for r in self.cursor.fetchall()]
     
     
-    # ==========================================
-    # Step 2: تصنيف التقارير
-    # ==========================================
-    
     def _classify_reports(self, reports: List[ReportItem]) -> List[ReportItem]:
-        """تصنيف كل تقرير حسب القسم وحساب الأولوية"""
-        
         for report in reports:
-            # البحث في العنوان أولاً (أهم)
             title_lower = report.title.lower()
             content_lower = report.content.lower() if report.content else ""
             
-            # تحديد القسم - الأولوية للعنوان
             report.section = "other"
             
-            # البحث في العنوان أولاً
             for section in BULLETIN_SECTIONS:
                 for keyword in section['keywords']:
                     if keyword in title_lower:
@@ -241,7 +264,6 @@ class BulletinGenerator:
                 if report.section != "other":
                     break
             
-            # إذا لم نجد في العنوان، نبحث في المحتوى
             if report.section == "other":
                 for section in BULLETIN_SECTIONS:
                     for keyword in section['keywords']:
@@ -251,26 +273,17 @@ class BulletinGenerator:
                     if report.section != "other":
                         break
             
-            # حساب الأولوية - نفس المنطق
             report.priority = 10
             text = title_lower + " " + content_lower
             for keyword, priority in HEADLINE_PRIORITIES:
                 if keyword in text:
                     report.priority = min(report.priority, priority)
         
-        # ترتيب حسب الأولوية
         reports.sort(key=lambda x: x.priority)
-        
         return reports
     
     
-    # ==========================================
-    # Step 3: إعادة صياغة التقارير
-    # ==========================================
-    
     def _rewrite_reports_for_bulletin(self, reports: List[ReportItem]) -> List[ReportItem]:
-        """إعادة صياغة كل تقرير كفقرة كاملة للنشرة"""
-        
         for i, report in enumerate(reports, 1):
             print(f"   [{i}/{len(reports)}] {report.title[:50]}...")
             
@@ -283,14 +296,12 @@ class BulletinGenerator:
 
 التعليمات المهمة:
 1. اكتب فقرة واحدة كاملة ومتماسكة (6-10 جمل على الأقل)
-2. يجب أن تكون الفقرة كاملة وغير مقطوعة - تأكد من إنهاء كل جملة بشكل صحيح
+2. يجب أن تكون الفقرة كاملة وغير مقطوعة
 3. ابدأ بالمعلومة الأهم ثم التفاصيل
 4. استخدم لغة عربية فصحى واضحة للقراءة الإذاعية
-5. حافظ على جميع الأرقام والأسماء والتواريخ الموجودة في التقرير
+5. حافظ على جميع الأرقام والأسماء والتواريخ
 6. لا تضف معلومات غير موجودة في التقرير الأصلي
-7. اجعل الفقرة مناسبة للقراءة الصوتية (بدون اختصارات أو رموز أو نجوم)
-8. لا تكتب عنواناً، فقط الفقرة
-9. تأكد من أن الفقرة مكتملة ولا تنتهي بكلمة ناقصة
+7. لا تكتب عنواناً، فقط الفقرة
 
 الفقرة الإذاعية الكاملة:"""
 
@@ -302,21 +313,18 @@ class BulletinGenerator:
                 )
                 report.summary = response.text.strip()
                 
-                # تنظيف
                 report.summary = re.sub(r'^#+\s*', '', report.summary)
                 report.summary = re.sub(r'\*\*|\*', '', report.summary)
                 report.summary = re.sub(r'^الفقرة الإذاعية:?\s*', '', report.summary)
                 report.summary = re.sub(r'^الفقرة:?\s*', '', report.summary)
                 
-                # التأكد من اكتمال النص (لا ينتهي بحرف ناقص)
                 if report.summary and not report.summary.rstrip().endswith(('.', '؟', '!', '،')):
-                    # إذا كان مقطوعاً، نحاول إكماله أو نضيف نقطة
                     last_period = max(
                         report.summary.rfind('.'),
                         report.summary.rfind('؟'),
                         report.summary.rfind('!')
                     )
-                    if last_period > len(report.summary) * 0.7:  # إذا كان آخر 30% فقط ناقص
+                    if last_period > len(report.summary) * 0.7:
                         report.summary = report.summary[:last_period + 1]
                     else:
                         report.summary = report.summary.rstrip() + '.'
@@ -325,7 +333,6 @@ class BulletinGenerator:
                 print(f"      ⚠️ خطأ: {e}")
                 report.summary = report.content[:800]
             
-            # تحديث في DB
             self._update_report_summary(report.id, report.summary)
         
         return reports
@@ -341,25 +348,13 @@ class BulletinGenerator:
             self.conn.rollback()
     
     
-    # ==========================================
-    # Step 4: اختيار أبرز العناوين
-    # ==========================================
-    
     def _select_top_headlines(self, reports: List[ReportItem]) -> List[Dict]:
-        """اختيار أبرز 3 عناوين بناءً على الأولوية"""
-        
-        # التقارير مرتبة مسبقاً بالأولوية
         top_3 = reports[:3]
-        
         return [
             {'report_id': r.id, 'title': r.title, 'rank': i+1, 'priority': r.priority}
             for i, r in enumerate(top_3)
         ]
     
-    
-    # ==========================================
-    # Step 5: بناء النشرة الكاملة
-    # ==========================================
     
     def _build_full_bulletin(
         self,
@@ -369,7 +364,6 @@ class BulletinGenerator:
         currency: Dict[str, float],
         weather: str
     ) -> Tuple[str, Dict]:
-        """بناء النص الكامل للنشرة بـ structure صحيح"""
         
         today = datetime.now()
         date_ar = self._format_date_arabic(today)
@@ -377,15 +371,9 @@ class BulletinGenerator:
         lines = []
         sections_data = {}
         
-        # ═══════════════════════════════════════
-        # الترويسة
-        # ═══════════════════════════════════════
         lines.append(f"نشرة أخبار {bulletin_type}")
         lines.append("")
         
-        # ═══════════════════════════════════════
-        # الافتتاحية + أبرز العناوين
-        # ═══════════════════════════════════════
         lines.append(f"أهلاً بكم مستمعينا الكرام في نشرة إخبارية مفصلة ليوم {date_ar}، نستهلها بأبرز العناوين:")
         lines.append("")
         
@@ -396,18 +384,12 @@ class BulletinGenerator:
         lines.append("أهلاً بكم إلى التفاصيل")
         lines.append("")
         
-        # ═══════════════════════════════════════
-        # الأخبار مقسمة حسب الأقسام
-        # ═══════════════════════════════════════
-        
-        # تجميع التقارير حسب القسم
         reports_by_section = {}
         for report in reports:
             if report.section not in reports_by_section:
                 reports_by_section[report.section] = []
             reports_by_section[report.section].append(report)
         
-        # كتابة كل قسم
         section_order = ['gaza', 'westbank', 'jerusalem', 'prisoners', 'local', 'arab', 'international', 'sports', 'other']
         
         for section_key in section_order:
@@ -417,12 +399,10 @@ class BulletinGenerator:
             section_reports = reports_by_section[section_key]
             section_info = next((s for s in BULLETIN_SECTIONS if s['key'] == section_key), None)
             
-            # عنوان القسم (إذا كان له اسم)
             if section_info and section_info['name']:
                 lines.append(section_info['name'])
                 lines.append("")
             
-            # أخبار القسم
             sections_data[section_key] = []
             for report in section_reports:
                 lines.append(f"({report.title})")
@@ -434,25 +414,16 @@ class BulletinGenerator:
                     'title': report.title
                 })
         
-        # ═══════════════════════════════════════
-        # أسعار العملات
-        # ═══════════════════════════════════════
         lines.append("في أسعار العملات")
         lines.append(f"الدولار الأمريكي: {currency['USD']} شيكل")
         lines.append(f"الدينار الأردني: {currency['JOD']} شيكل")
         lines.append(f"اليورو: {currency['EUR']} شيكل")
         lines.append("")
         
-        # ═══════════════════════════════════════
-        # حالة الطقس
-        # ═══════════════════════════════════════
         lines.append("في حالة الطقس")
         lines.append(weather)
         lines.append("")
         
-        # ═══════════════════════════════════════
-        # إعادة أبرز العناوين
-        # ═══════════════════════════════════════
         lines.append("نعود ونذكركم بأبرز عناوين نشرتنا:")
         for h in top_headlines:
             lines.append(f"• {h['title']}")
@@ -480,10 +451,6 @@ class BulletinGenerator:
             return "يكون الجو معتدلاً في المناطق الجبلية، دافئاً في بقية المناطق، غائماً جزئياً إلى صاف."
     
     
-    # ==========================================
-    # Step 6: حفظ النشرة
-    # ==========================================
-    
     def _save_bulletin(
         self,
         bulletin_type: str,
@@ -494,11 +461,11 @@ class BulletinGenerator:
         currency: Dict,
         weather: str,
         word_count: int,
-        duration_seconds: int
+        duration_seconds: int,
+        report_ids: List[int]
     ) -> BulletinResult:
         
         try:
-            # تجهيز news_items
             news_items = [
                 {
                     'report_id': r.id,
@@ -518,21 +485,15 @@ class BulletinGenerator:
                 'currency': currency,
                 'weather': weather,
                 'news_count': len(reports),
-                'word_count': word_count
+                'word_count': word_count,
+                'report_ids': report_ids
             }
             
-            # إدراج أو تحديث النشرة (UPSERT)
+            # INSERT دائماً (سجل جديد لكل تغيير)
             self.cursor.execute("""
                 INSERT INTO news_bulletins 
                 (bulletin_type, broadcast_date, content, full_script, estimated_duration_seconds, status)
                 VALUES (%s, %s, %s, %s, %s, 'ready')
-                ON CONFLICT (broadcast_date, bulletin_type) 
-                DO UPDATE SET 
-                    content = EXCLUDED.content,
-                    full_script = EXCLUDED.full_script,
-                    estimated_duration_seconds = EXCLUDED.estimated_duration_seconds,
-                    status = EXCLUDED.status,
-                    updated_at = NOW()
                 RETURNING id
             """, (
                 bulletin_type,
@@ -544,13 +505,6 @@ class BulletinGenerator:
             
             bulletin_id = self.cursor.fetchone()[0]
             
-            # حذف الروابط القديمة
-            self.cursor.execute(
-                "DELETE FROM bulletin_reports WHERE bulletin_id = %s",
-                (bulletin_id,)
-            )
-            
-            # ربط التقارير
             for i, report in enumerate(reports):
                 is_headline = any(h['report_id'] == report.id for h in top_headlines)
                 headline_rank = None
@@ -571,7 +525,7 @@ class BulletinGenerator:
             return BulletinResult(
                 success=True,
                 bulletin_id=bulletin_id,
-                message=f"تم إنشاء النشرة بنجاح (ID: {bulletin_id})",
+                message=f"✅ تم إنشاء نشرة جديدة (ID: {bulletin_id})",
                 news_count=len(reports),
                 word_count=word_count,
                 duration_seconds=duration_seconds
@@ -590,10 +544,6 @@ class BulletinGenerator:
         print("🔒 تم إغلاق الاتصالات")
 
 
-# ============================================
-# Standalone Function
-# ============================================
-
 def generate_bulletin(bulletin_type: str = "صباحية", **kwargs) -> BulletinResult:
     gen = BulletinGenerator()
     try:
@@ -601,10 +551,6 @@ def generate_bulletin(bulletin_type: str = "صباحية", **kwargs) -> Bulletin
     finally:
         gen.close()
 
-
-# ============================================
-# Test
-# ============================================
 
 if __name__ == "__main__":
     print("\n" + "="*70)
@@ -626,21 +572,7 @@ if __name__ == "__main__":
         print(f"نجاح: {result.success}")
         print(f"ID: {result.bulletin_id}")
         print(f"الرسالة: {result.message}")
-        print(f"عدد الأخبار: {result.news_count}")
-        print(f"عدد الكلمات: {result.word_count}")
-        print(f"المدة: {result.duration_seconds // 60} دقيقة و {result.duration_seconds % 60} ثانية")
-        
-        if result.success and result.bulletin_id:
-            gen.cursor.execute(
-                "SELECT full_script FROM news_bulletins WHERE id = %s",
-                (result.bulletin_id,)
-            )
-            row = gen.cursor.fetchone()
-            if row:
-                print("\n" + "="*70)
-                print("📜 النشرة الكاملة:")
-                print("="*70)
-                print(row[0])
+        print(f"SKIP: {result.skipped}")
         
     except Exception as e:
         print(f"❌ خطأ: {e}")

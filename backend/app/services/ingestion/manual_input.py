@@ -6,7 +6,8 @@
 
 Path: backend/app/services/ingestion/manual_input.py
 """
-
+import certifi, os
+os.environ["SSL_CERT_FILE"] = certifi.where()
 import os
 import sys
 import re
@@ -94,11 +95,11 @@ class ManualInputProcessor:
     يقوم بـ:
     1. استقبال نص خام من المستخدم
     2. معالجته بـ AI (ترتيب، عنوان، فصحى، تصنيف)
-    3. حفظه في raw_news مع input_method_id = 5
+    3. حفظه في raw_news مع source_type_id = 5 (manual_entry)
     """
     
-    # Manual Entry input_method_id from database
-    INPUT_METHOD_ID = 5  # manual_entry
+    # Manual Entry source_type_id from database
+    SOURCE_TYPE_ID = 5  # manual_entry
     
     def __init__(self):
         """تهيئة المعالج"""
@@ -452,7 +453,7 @@ class ManualInputProcessor:
                     source_id,
                     language_id,
                     category_id,
-                    input_method_id,
+                    source_type_id,
                     original_text,
                     metadata,
                     published_at,
@@ -469,7 +470,7 @@ class ManualInputProcessor:
                     source_id,  # NULL for manual entry
                     1,  # language_id = 1 (Arabic)
                     category_id,
-                    self.INPUT_METHOD_ID,  # 5 = manual_entry
+                    self.SOURCE_TYPE_ID,  # 5 = manual_entry
                     processed.original_text,
                     '{}',  # metadata as empty JSON
                     now,  # published_at
@@ -582,7 +583,7 @@ if __name__ == "__main__":
             print("\n📰 Verifying saved news:")
             processor.cursor.execute(
                 """
-                SELECT id, title, content_text, category_id, input_method_id, tags
+                SELECT id, title, content_text, category_id, source_type_id, tags
                 FROM raw_news WHERE id = %s
                 """,
                 (result.news_id,)
@@ -593,7 +594,7 @@ if __name__ == "__main__":
                 print(f"   Title: {row[1]}")
                 print(f"   Content: {row[2][:100]}...")
                 print(f"   Category ID: {row[3]}")
-                print(f"   Input Method ID: {row[4]}")
+                print(f"   Source Type ID: {row[4]}")
                 print(f"   Tags: {row[5]}")
                 
     except Exception as e:
