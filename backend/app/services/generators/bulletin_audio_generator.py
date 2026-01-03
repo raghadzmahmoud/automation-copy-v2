@@ -560,8 +560,8 @@ class BulletinAudioGenerator:
                 # إعداد الصوت (عربي)
                 voice = texttospeech.VoiceSelectionParams(
                     language_code="ar-XA",
-                    name="ar-XA-Chirp3-HD-Achird",
-                    ssml_gender=texttospeech.SsmlVoiceGender.MALE
+                    name="ar-XA-Chirp3-HD-Achernar",
+                    ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
                 )
                 
                 # إعداد الصوت
