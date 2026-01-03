@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-📻 Bulletin & Digest Job
-جدولة النشرة والموجز
+📻 Bulletin & Digest Job + 🎙️ Audio Generation
+جدولة النشرة والموجز مع توليد الصوت تلقائياً
 
 المسار: app/jobs/bulletin_digest_job.py
 
@@ -11,7 +11,7 @@
 - الموجز: كل 10 دقائق
 
 المنطق:
-- إذا في أخبار جديدة → INSERT سجل جديد
+- إذا في أخبار جديدة → INSERT سجل جديد → توليد صوت
 - إذا نفس الأخبار → SKIP (لا شيء)
 """
 
@@ -22,12 +22,84 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================
+# 🎙️ توليد الصوت
+# ============================================
+
+def generate_audio_for_bulletin(bulletin_id: int) -> bool:
+    """
+    توليد صوت للنشرة
+    
+    Args:
+        bulletin_id: رقم النشرة
+        
+    Returns:
+        bool: True إذا نجح
+    """
+    try:
+        from app.services.generators.bulletin_audio_generator import BulletinAudioGenerator
+        
+        logger.info(f"🎙️ توليد صوت للنشرة #{bulletin_id}...")
+        
+        gen = BulletinAudioGenerator()
+        try:
+            result = gen.generate_for_bulletin(bulletin_id, force_update=False)
+            
+            if result.success:
+                logger.info(f"✅ تم توليد صوت النشرة: {result.audio_url}")
+                return True
+            else:
+                logger.warning(f"⚠️ فشل توليد صوت النشرة: {result.error_message}")
+                return False
+                
+        finally:
+            gen.close()
+            
+    except Exception as e:
+        logger.error(f"❌ خطأ في توليد صوت النشرة: {e}")
+        return False
+
+
+def generate_audio_for_digest(digest_id: int) -> bool:
+    """
+    توليد صوت للموجز
+    
+    Args:
+        digest_id: رقم الموجز
+        
+    Returns:
+        bool: True إذا نجح
+    """
+    try:
+        from app.services.generators.bulletin_audio_generator import BulletinAudioGenerator
+        
+        logger.info(f"🎙️ توليد صوت للموجز #{digest_id}...")
+        
+        gen = BulletinAudioGenerator()
+        try:
+            result = gen.generate_for_digest(digest_id, force_update=False)
+            
+            if result.success:
+                logger.info(f"✅ تم توليد صوت الموجز: {result.audio_url}")
+                return True
+            else:
+                logger.warning(f"⚠️ فشل توليد صوت الموجز: {result.error_message}")
+                return False
+                
+        finally:
+            gen.close()
+            
+    except Exception as e:
+        logger.error(f"❌ خطأ في توليد صوت الموجز: {e}")
+        return False
+
+
+# ============================================
 # 📻 النشرة الإخبارية
 # ============================================
 
 def generate_bulletin_job():
     """
-    توليد النشرة الإخبارية
+    توليد النشرة الإخبارية + الصوت
     
     - صباحية: من 6 صباحاً حتى 2 ظهراً
     - مسائية: من 2 ظهراً حتى 12 ليلاً
@@ -62,6 +134,14 @@ def generate_bulletin_job():
             else:
                 logger.info(f"✅ تم توليد النشرة {bulletin_type} (ID: {result.bulletin_id})")
                 logger.info(f"   📊 {result.news_count} خبر، {result.word_count} كلمة، {result.duration_seconds//60} دقيقة")
+                
+                # ════════════════════════════════════════════════════════
+                # 🎙️ NEW: توليد الصوت للنشرة الجديدة
+                # ════════════════════════════════════════════════════════
+                if result.bulletin_id:
+                    generate_audio_for_bulletin(result.bulletin_id)
+                # ════════════════════════════════════════════════════════
+                
         else:
             logger.warning(f"⚠️ فشل توليد النشرة: {result.message}")
             
@@ -84,7 +164,7 @@ def generate_bulletin_job():
 
 def generate_digest_job():
     """
-    توليد الموجز الإخباري
+    توليد الموجز الإخباري + الصوت
     
     يتم التحديث كل 10 دقائق بأحدث الأخبار
     إذا لم تتغير الأخبار → SKIP
@@ -115,6 +195,14 @@ def generate_digest_job():
             else:
                 logger.info(f"✅ تم توليد الموجز (ID: {result.digest_id})")
                 logger.info(f"   📊 {result.news_count} خبر، {result.duration_seconds} ثانية")
+                
+                # ════════════════════════════════════════════════════════
+                # 🎙️ NEW: توليد الصوت للموجز الجديد
+                # ════════════════════════════════════════════════════════
+                if result.digest_id:
+                    generate_audio_for_digest(result.digest_id)
+                # ════════════════════════════════════════════════════════
+                
         else:
             logger.warning(f"⚠️ فشل توليد الموجز: {result.message}")
             
@@ -136,15 +224,15 @@ def generate_digest_job():
 # ============================================
 
 def generate_all():
-    """توليد النشرة والموجز معاً"""
+    """توليد النشرة والموجز معاً (مع الصوت)"""
     logger.info("="*60)
     logger.info("🔄 بدء توليد النشرة والموجز...")
     logger.info("="*60)
     
-    # توليد النشرة
+    # توليد النشرة (+ صوت)
     bulletin_result = generate_bulletin_job()
     
-    # توليد الموجز
+    # توليد الموجز (+ صوت)
     digest_result = generate_digest_job()
     
     logger.info("="*60)
@@ -168,7 +256,7 @@ if __name__ == "__main__":
     )
     
     print("\n" + "="*60)
-    print("🧪 اختبار Bulletin & Digest Job")
+    print("🧪 اختبار Bulletin & Digest Job + Audio")
     print("="*60)
     print(f"🕐 الوقت الحالي: {datetime.now().strftime('%H:%M:%S')}")
     
@@ -178,12 +266,12 @@ if __name__ == "__main__":
     print(f"📰 ساعة الموجز: {current_hour}:00")
     print("="*60)
     
-    # اختبار النشرة
-    print("\n📻 اختبار النشرة...")
+    # اختبار النشرة (+ صوت)
+    print("\n📻 اختبار النشرة + الصوت...")
     bulletin_result = generate_bulletin_job()
     
-    # اختبار الموجز
-    print("\n📰 اختبار الموجز...")
+    # اختبار الموجز (+ صوت)
+    print("\n📰 اختبار الموجز + الصوت...")
     digest_result = generate_digest_job()
     
     # ملخص
@@ -195,12 +283,12 @@ if __name__ == "__main__":
         if bulletin_result.skipped:
             print(f"📻 النشرة: ⏭️ SKIP")
         else:
-            print(f"📻 النشرة: ✅ ID={bulletin_result.bulletin_id}")
+            print(f"📻 النشرة: ✅ ID={bulletin_result.bulletin_id} + 🎙️ صوت")
     
     if digest_result:
         if digest_result.skipped:
             print(f"📰 الموجز: ⏭️ SKIP")
         else:
-            print(f"📰 الموجز: ✅ ID={digest_result.digest_id}")
+            print(f"📰 الموجز: ✅ ID={digest_result.digest_id} + 🎙️ صوت")
     
     print("\n✅ انتهى الاختبار!")
