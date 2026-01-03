@@ -28,13 +28,13 @@ class SocialMediaContent:
         if not self.title or len(self.title.strip()) < 5:
             return False, "العنوان قصير جداً"
         
-        if not self.content or len(self.content.strip()) < 50:
+        if not self.content or len(self.content.strip()) < 30:
             return False, "المحتوى قصير جداً"
         
         max_length = {
             'twitter': 350,
-            'facebook': 600,
-            'instagram': 400   
+            'facebook': 800,
+            'instagram': 500,   
          }.get(self.platform.lower(), 600)
         
         if len(self.content) > max_length:
@@ -76,7 +76,7 @@ class SocialMediaParser:
                     result[platform] = content_obj
         
         # يجب أن نحصل على 3 منصات بالضبط
-        if len(result) == 3:
+        if len(result) == 2:
             return result
         
         return None
@@ -186,7 +186,7 @@ class SocialMediaGenerator:
         self.platforms = {
             'facebook': {
                 'name': 'Facebook',
-                'max_length': 600,
+                'max_length': 700,
                 'style': 'جذاب ومشوّق',
                 'hashtags': 3
             },
@@ -198,7 +198,7 @@ class SocialMediaGenerator:
             },
             'instagram': {
                 'name': 'Instagram',
-                'max_length': 500,
+                'max_length': 550,
                 'style': 'بصري وملهم',
                 'hashtags': 5
             }
@@ -333,7 +333,7 @@ class SocialMediaGenerator:
                     model=GEMINI_MODEL,
                     contents=prompt,
                     config={
-                        'temperature': 0.8,
+                        'temperature': 0.4,
                         'max_output_tokens': 2048
                     }
                 )
@@ -397,7 +397,7 @@ class SocialMediaGenerator:
 [FACEBOOK]
 العنوان: عنوان جذاب (5-10 كلمات)
 المحتوى: 
-منشور Facebook هنا (400-600 حرف)
+منشور Facebook هنا (400-700 حرف)
 - أسلوب جذاب ومشوّق
 - جملة افتتاحية قوية
 - 3 هاشتاقات
@@ -412,7 +412,7 @@ class SocialMediaGenerator:
 [INSTAGRAM]
 العنوان: عنوان ملهم (5-10 كلمات)
 المحتوى:
-منشور Instagram هنا (350-500 حرف)
+منشور Instagram هنا (400-550 حرف)
 - أسلوب بصري وملهم
 - 5 هاشتاقات
 

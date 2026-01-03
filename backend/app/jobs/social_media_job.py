@@ -2,10 +2,8 @@
 """
 📱 Social Media Generation Job (Condition-Based)
 
-⚠️ لا يوجد تحقق من الوقت!
-   الـ start_worker.py هو المتحكم بالوقت
-
 Condition: يشتغل فقط إذا في تقارير بدون محتوى social media
+Tables: generated_report, generated_content, content_types
 """
 import sys
 import os
@@ -38,18 +36,21 @@ logger = logging.getLogger(__name__)
 def has_reports_without_social_media(hours: int = 48) -> tuple:
     """
     ✅ Condition: هل في تقارير جديدة بدون محتوى social media؟
-    Returns: (bool, count)
+    Tables: generated_report, generated_content
     """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
+        # تقارير بدون أي محتوى social media
         cursor.execute("""
-            SELECT COUNT(*) FROM reports r
-            WHERE r.created_at >= NOW() - INTERVAL '%s hours'
+            SELECT COUNT(*) FROM generated_report gr
+            WHERE gr.created_at >= NOW() - INTERVAL '%s hours'
             AND NOT EXISTS (
-                SELECT 1 FROM social_media_content smc
-                WHERE smc.report_id = r.id
+                SELECT 1 FROM generated_content gc
+                JOIN content_types ct ON gc.content_type_id = ct.id
+                WHERE gc.report_id = gr.id
+                AND LOWER(ct.name) IN ('facebook', 'twitter', 'instagram', 'social', 'social_media')
             )
         """, (hours,))
         

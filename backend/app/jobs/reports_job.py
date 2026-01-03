@@ -2,10 +2,8 @@
 """
 📝 Report Generation Job (Condition-Based)
 
-⚠️ لا يوجد تحقق من الوقت!
-   الـ start_worker.py هو المتحكم بالوقت
-
 Condition: يشتغل فقط إذا في clusters بدون تقارير
+Table: generated_report
 """
 import sys
 import os
@@ -39,7 +37,7 @@ logger = logging.getLogger(__name__)
 def has_clusters_without_reports(hours: int = 48) -> tuple:
     """
     ✅ Condition: هل في clusters جديدة بدون تقارير؟
-    Returns: (bool, count)
+    Table: generated_report (not reports)
     """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
@@ -49,8 +47,8 @@ def has_clusters_without_reports(hours: int = 48) -> tuple:
             SELECT COUNT(*) FROM news_clusters nc
             WHERE nc.created_at >= NOW() - INTERVAL '%s hours'
             AND NOT EXISTS (
-                SELECT 1 FROM reports r
-                WHERE r.cluster_id = nc.id
+                SELECT 1 FROM generated_report gr
+                WHERE gr.cluster_id = nc.id
             )
         """, (hours,))
         

@@ -1,10 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-🎨 Image Generator Service
+🎨 Image Generator Service (Enhanced)
 توليد صور AI للتقارير باستخدام Gemini
 
 📁 S3 Path: generated/images/
+
+✅ التحسينات:
+- تقليل وقت الانتظار (30 ثانية بدل 60)
+- تسجيل الفشل للمحاولة لاحقاً
+- تخطي التقارير اللي فشلت كتير
+- Fallback prompt أبسط
 """
 
 import os
@@ -38,10 +44,17 @@ class ImageGenerationResult:
     s3_path: Optional[str] = None
     error_message: Optional[str] = None
     prompt_used: Optional[str] = None
+    skipped: bool = False  # ✅ جديد: تم تخطيه؟
 
 
 class ImageGenerator:
     """مولد الصور للتقارير باستخدام Gemini"""
+    
+    # ✅ الحد الأقصى لمحاولات الفشل قبل التخطي
+    MAX_FAILURE_ATTEMPTS = 3
+    
+    # ✅ وقت الانتظار بين الطلبات (ثواني)
+    WAIT_BETWEEN_REQUESTS = 30  # كان 60
     
     def __init__(self):
         """تهيئة المولد"""
@@ -61,8 +74,6 @@ class ImageGenerator:
         try:
             self.s3_client = boto3.client('s3')
             self.bucket_name = os.getenv('S3_BUCKET_NAME', 'media-automation-bucket')
-            
-            # ✅ المسار الصحيح: generated/images/
             self.s3_folder = os.getenv('S3_GENERATED_IMAGES_FOLDER', 'generated/images/')
             
             print(f"✅ S3 client initialized (Bucket: {self.bucket_name})")
@@ -82,6 +93,66 @@ class ImageGenerator:
         
         # Content Type ID for Generated Images
         self.content_type_id = 6
+        
+        # ✅ إنشاء جدول تتبع الفشل إذا ما كان موجود
+        self._ensure_failure_tracking_table()
+    
+    def _ensure_failure_tracking_table(self):
+        """✅ إنشاء جدول تتبع فشل توليد الصور"""
+        try:
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS image_generation_failures (
+                    id SERIAL PRIMARY KEY,
+                    report_id INTEGER NOT NULL,
+                    error_message TEXT,
+                    attempt_count INTEGER DEFAULT 1,
+                    last_attempt_at TIMESTAMP DEFAULT NOW(),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(report_id)
+                )
+            """)
+            self.conn.commit()
+        except Exception as e:
+            print(f"   ⚠️ Could not create failure tracking table: {e}")
+            self.conn.rollback()
+    
+    def _get_failure_count(self, report_id: int) -> int:
+        """✅ جلب عدد محاولات الفشل السابقة"""
+        try:
+            self.cursor.execute("""
+                SELECT attempt_count FROM image_generation_failures
+                WHERE report_id = %s
+            """, (report_id,))
+            row = self.cursor.fetchone()
+            return row[0] if row else 0
+        except:
+            return 0
+    
+    def _record_failure(self, report_id: int, error_message: str):
+        """✅ تسجيل فشل التوليد"""
+        try:
+            self.cursor.execute("""
+                INSERT INTO image_generation_failures (report_id, error_message, attempt_count, last_attempt_at)
+                VALUES (%s, %s, 1, NOW())
+                ON CONFLICT (report_id) DO UPDATE SET
+                    error_message = EXCLUDED.error_message,
+                    attempt_count = image_generation_failures.attempt_count + 1,
+                    last_attempt_at = NOW()
+            """, (report_id, error_message[:500]))
+            self.conn.commit()
+        except Exception as e:
+            print(f"   ⚠️ Could not record failure: {e}")
+            self.conn.rollback()
+    
+    def _clear_failure(self, report_id: int):
+        """✅ مسح سجل الفشل بعد النجاح"""
+        try:
+            self.cursor.execute("""
+                DELETE FROM image_generation_failures WHERE report_id = %s
+            """, (report_id,))
+            self.conn.commit()
+        except:
+            self.conn.rollback()
     
     def generate_for_report(
         self,
@@ -92,6 +163,16 @@ class ImageGenerator:
         print(f"\n{'='*70}")
         print(f"🎨 Generating Image for Report #{report_id}")
         print(f"{'='*70}")
+        
+        # ✅ فحص عدد محاولات الفشل السابقة
+        failure_count = self._get_failure_count(report_id)
+        if failure_count >= self.MAX_FAILURE_ATTEMPTS:
+            print(f"⏭️  Skipping: Failed {failure_count} times before (max: {self.MAX_FAILURE_ATTEMPTS})")
+            return ImageGenerationResult(
+                success=False,
+                skipped=True,
+                error_message=f"Skipped: exceeded {self.MAX_FAILURE_ATTEMPTS} failures"
+            )
         
         # جلب التقرير
         report = self._fetch_report(report_id)
@@ -111,22 +192,41 @@ class ImageGenerator:
             return ImageGenerationResult(
                 success=True,
                 image_url=existing_image['file_url'],
-                s3_path=existing_image['file_url']
+                s3_path=existing_image['file_url'],
+                skipped=True
             )
         
         # إنشاء prompt للصورة
         image_prompt = self._create_image_prompt(report)
         print(f"📝 Prompt created ({len(image_prompt)} chars)")
         
-        # توليد الصورة ورفعها على S3 مباشرة
+        # توليد الصورة ورفعها على S3
         generation_result = self._generate_and_upload_image(image_prompt, report_id)
         
         if not generation_result.success:
             print(f"❌ Image generation failed: {generation_result.error_message}")
-            return generation_result
+            
+            # ✅ تسجيل الفشل
+            self._record_failure(report_id, generation_result.error_message or "Unknown error")
+            
+            # ✅ محاولة بـ fallback prompt أبسط
+            if failure_count < 1:  # محاولة واحدة فقط بالـ fallback
+                print("   🔄 Trying with simplified prompt...")
+                simple_prompt = self._create_simple_prompt(report)
+                generation_result = self._generate_and_upload_image(simple_prompt, report_id)
+                
+                if generation_result.success:
+                    print("   ✅ Succeeded with simplified prompt!")
+                    self._clear_failure(report_id)
+            
+            if not generation_result.success:
+                return generation_result
         
         print(f"✅ Image generated and uploaded successfully")
         s3_url = generation_result.image_url
+        
+        # ✅ مسح سجل الفشل بعد النجاح
+        self._clear_failure(report_id)
         
         # حفظ في قاعدة البيانات
         if existing_image:
@@ -184,6 +284,7 @@ class ImageGenerator:
             }
         
         print(f"📋 Found {len(reports)} reports to process")
+        print(f"⏱️  Wait time between requests: {self.WAIT_BETWEEN_REQUESTS}s")
         
         stats = {
             'total_reports': len(reports),
@@ -196,29 +297,42 @@ class ImageGenerator:
         for i, report in enumerate(reports, 1):
             print(f"\n[{i}/{len(reports)}] Report #{report['id']}")
             
-            result = self.generate_for_report(
-                report_id=report['id'],
-                force_update=force_update
-            )
-            
-            if result.success:
-                if force_update:
-                    stats['updated'] += 1
+            try:
+                result = self.generate_for_report(
+                    report_id=report['id'],
+                    force_update=force_update
+                )
+                
+                if result.success:
+                    if result.skipped:
+                        stats['skipped'] += 1
+                    elif force_update:
+                        stats['updated'] += 1
+                    else:
+                        stats['success'] += 1
                 else:
-                    stats['success'] += 1
-            else:
+                    if result.skipped:
+                        stats['skipped'] += 1
+                    else:
+                        stats['failed'] += 1
+                
+            except Exception as e:
+                print(f"   ❌ Unexpected error: {e}")
                 stats['failed'] += 1
+                # ✅ الاستمرار حتى لو فشل تقرير واحد
+                continue
             
-            # تأخير بين الطلبات
-            if i < len(reports):
-                print("   ⏳ Waiting 60 seconds before next request...")
-                time.sleep(60)
+            # ✅ تأخير مخفف بين الطلبات
+            if i < len(reports) and not (result.skipped if result else True):
+                print(f"   ⏳ Waiting {self.WAIT_BETWEEN_REQUESTS} seconds...")
+                time.sleep(self.WAIT_BETWEEN_REQUESTS)
         
         print(f"\n{'='*70}")
         print(f"📊 Final Results:")
         print(f"   • Reports: {stats['total_reports']}")
         print(f"   • Success: {stats['success']}")
         print(f"   • Updated: {stats['updated']}")
+        print(f"   • Skipped: {stats['skipped']}")
         print(f"   • Failed: {stats['failed']}")
         print(f"{'='*70}")
         
@@ -252,6 +366,18 @@ Size: Horizontal (16:9)
 Style: Realistic photojournalism
 """
         return prompt
+    
+    def _create_simple_prompt(self, report: Dict) -> str:
+        """✅ Prompt أبسط للـ fallback"""
+        keywords = self._extract_keywords(report['title'], report['content'])
+        main_topic = keywords[0] if keywords else "news"
+        
+        return f"""Create a simple professional news image about: {main_topic}
+
+Style: Clean, professional, news-style
+Format: Horizontal 16:9
+No text, no faces, no watermarks
+"""
     
     def _extract_keywords(self, title: str, content: str) -> List[str]:
         """استخراج كلمات مفتاحية"""
@@ -291,12 +417,10 @@ Style: Realistic photojournalism
             try:
                 print(f"   🎨 Generating image (attempt {attempt + 1}/{retries})...")
                 
-                # Config with response_modalities
                 config = GenerateContentConfig(
                     response_modalities=[Modality.TEXT, Modality.IMAGE]
                 )
                 
-                # Call Gemini API
                 response = self.gemini_client.models.generate_content(
                     model=self.image_model,
                     contents=[prompt],
@@ -305,7 +429,6 @@ Style: Realistic photojournalism
                 
                 print(f"   ✅ Response received")
                 
-                # Loop through ALL parts
                 image_data_raw = None
                 text_response = None
                 
@@ -315,24 +438,13 @@ Style: Realistic photojournalism
                 print(f"   📦 Response has {len(response.parts)} parts")
                 
                 for i, part in enumerate(response.parts):
-                    print(f"   📦 Checking part #{i+1}...")
-                    
                     if hasattr(part, 'text') and part.text:
                         text_response = part.text
-                        print(f"      ✅ Text: {text_response[:60]}...")
                     
                     if hasattr(part, 'inline_data') and part.inline_data:
-                        print(f"      ✅✅✅ Found inline_data!")
-                        
-                        if hasattr(part.inline_data, 'mime_type'):
-                            mime_type = part.inline_data.mime_type
-                            print(f"         📄 MIME type: {mime_type}")
-                        
                         if hasattr(part.inline_data, 'data') and part.inline_data.data:
                             image_data_raw = part.inline_data.data
-                            data_size = len(image_data_raw)
-                            print(f"         📏 Data size: {data_size:,} bytes")
-                            print(f"         🎉 IMAGE DATA FOUND!")
+                            print(f"   🎉 Image data found!")
                             break
                 
                 if not image_data_raw:
@@ -340,37 +452,26 @@ Style: Realistic photojournalism
                 
                 print(f"   ✅ Image data extracted ({len(image_data_raw):,} bytes)")
                 
-                # Convert from Base64 to PNG
-                print(f"   🔄 Converting from Base64 to PNG...")
-                
+                # Convert to PNG
                 try:
                     if image_data_raw[:8] == b'\x89PNG\r\n\x1a\n':
-                        print(f"      ℹ️  Data is raw PNG bytes")
                         decoded_data = image_data_raw
                     else:
-                        print(f"      🔍 Detected Base64 encoding")
                         decoded_data = base64.b64decode(image_data_raw)
-                        print(f"      ✅ Base64 decoded ({len(decoded_data):,} bytes)")
                     
                     temp_image = Image.open(io.BytesIO(decoded_data))
-                    
-                    print(f"      ✅ PIL opened image successfully")
-                    print(f"         Size: {temp_image.size}")
-                    print(f"         Format: {temp_image.format}")
-                    print(f"         Mode: {temp_image.mode}")
                     
                     byteImgIO = io.BytesIO()
                     temp_image.save(byteImgIO, "PNG")
                     byteImgIO.seek(0)
                     image_bytes = byteImgIO.read()
                     
-                    print(f"      ✅ Converted to PNG ({len(image_bytes):,} bytes)")
+                    print(f"   ✅ Converted to PNG ({len(image_bytes):,} bytes)")
                     
                 except Exception as e:
-                    print(f"      ❌ Processing failed: {e}")
                     raise ValueError(f"Cannot process image data: {e}")
                 
-                # ✅ Upload to S3: generated/images/
+                # Upload to S3
                 timestamp = int(time.time())
                 file_name = f"report_{report_id}_{timestamp}.png"
                 s3_key = f"{self.s3_folder}{file_name}"
@@ -395,28 +496,36 @@ Style: Realistic photojournalism
                 
             except Exception as e:
                 error_msg = str(e)
-                print(f"   ⚠️  Error: {error_msg[:300]}")
+                print(f"   ⚠️  Error: {error_msg[:200]}")
                 
+                # Rate limit handling
                 if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
                     if attempt < retries - 1:
-                        wait_time = 60
+                        wait_time = 30  # ✅ مخفف من 60
                         print(f"   ⏳ Rate limit hit. Waiting {wait_time} seconds...")
                         time.sleep(wait_time)
                         continue
                     else:
                         return ImageGenerationResult(
                             success=False,
-                            error_message="Rate limit exceeded. Please try again later."
+                            error_message="Rate limit exceeded"
                         )
                 
+                # "Response has no parts" - common error
+                if "no parts" in error_msg.lower():
+                    if attempt < retries - 1:
+                        print(f"   🔄 Empty response, retrying in 10s...")
+                        time.sleep(10)
+                        continue
+                
                 if attempt < retries - 1:
-                    print(f"   🔄 Retrying in 10 seconds...")
-                    time.sleep(10)
+                    print(f"   🔄 Retrying in 5 seconds...")
+                    time.sleep(5)  # ✅ مخفف من 10
                     continue
                 else:
                     return ImageGenerationResult(
                         success=False,
-                        error_message=f"Generation failed: {error_msg[:300]}"
+                        error_message=f"Generation failed: {error_msg[:200]}"
                     )
         
         return ImageGenerationResult(
@@ -448,7 +557,7 @@ Style: Realistic photojournalism
             return None
     
     def _fetch_reports_without_images(self, limit: int = 40) -> List[Dict]:
-        """جلب التقارير بدون صور"""
+        """✅ جلب التقارير بدون صور (مع استثناء الفاشلة كتير)"""
         try:
             query = """
                 SELECT 
@@ -464,11 +573,17 @@ Style: Realistic photojournalism
                         WHERE gc.report_id = gr.id
                             AND gc.content_type_id = %s
                     )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM image_generation_failures igf
+                        WHERE igf.report_id = gr.id
+                            AND igf.attempt_count >= %s
+                    )
                 ORDER BY gr.created_at DESC
                 LIMIT %s
             """
             
-            self.cursor.execute(query, (self.content_type_id, limit))
+            self.cursor.execute(query, (self.content_type_id, self.MAX_FAILURE_ATTEMPTS, limit))
             rows = self.cursor.fetchall()
             
             return [
@@ -482,37 +597,41 @@ Style: Realistic photojournalism
             ]
         except Exception as e:
             print(f"   ❌ Error fetching reports: {e}")
+            # Fallback to original query
+            return self._fetch_reports_without_images_simple(limit)
+    
+    def _fetch_reports_without_images_simple(self, limit: int = 40) -> List[Dict]:
+        """جلب التقارير بدون صور (بدون فلتر الفشل)"""
+        try:
+            query = """
+                SELECT gr.id, gr.title, gr.content, gr.updated_at
+                FROM generated_report gr
+                WHERE gr.status = 'draft'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM generated_content gc
+                        WHERE gc.report_id = gr.id AND gc.content_type_id = %s
+                    )
+                ORDER BY gr.created_at DESC
+                LIMIT %s
+            """
+            self.cursor.execute(query, (self.content_type_id, limit))
+            return [{'id': r[0], 'title': r[1], 'content': r[2], 'updated_at': r[3]} for r in self.cursor.fetchall()]
+        except:
             return []
     
     def _fetch_recent_reports(self, limit: int = 40) -> List[Dict]:
         """جلب التقارير الأخيرة"""
         try:
             query = """
-                SELECT 
-                    id,
-                    title,
-                    content,
-                    updated_at
+                SELECT id, title, content, updated_at
                 FROM generated_report
                 WHERE status = 'draft'
                 ORDER BY updated_at DESC
                 LIMIT %s
             """
-            
             self.cursor.execute(query, (limit,))
-            rows = self.cursor.fetchall()
-            
-            return [
-                {
-                    'id': row[0],
-                    'title': row[1],
-                    'content': row[2],
-                    'updated_at': row[3]
-                }
-                for row in rows
-            ]
-        except Exception as e:
-            print(f"   ❌ Error fetching reports: {e}")
+            return [{'id': r[0], 'title': r[1], 'content': r[2], 'updated_at': r[3]} for r in self.cursor.fetchall()]
+        except:
             return []
     
     def _get_existing_image(self, report_id: int) -> Optional[Dict]:
@@ -521,22 +640,13 @@ Style: Realistic photojournalism
             self.cursor.execute("""
                 SELECT id, file_url, updated_at
                 FROM generated_content
-                WHERE report_id = %s
-                    AND content_type_id = %s
+                WHERE report_id = %s AND content_type_id = %s
                 LIMIT 1
             """, (report_id, self.content_type_id))
             
             row = self.cursor.fetchone()
-            if not row:
-                return None
-            
-            return {
-                'id': row[0],
-                'file_url': row[1],
-                'updated_at': row[2]
-            }
-        except Exception as e:
-            print(f"   ❌ Error checking existing image: {e}")
+            return {'id': row[0], 'file_url': row[1], 'updated_at': row[2]} if row else None
+        except:
             return None
     
     def _save_image_record(self, report_id: int, s3_url: str, prompt: str) -> bool:
@@ -544,57 +654,31 @@ Style: Realistic photojournalism
         try:
             self.cursor.execute("""
                 INSERT INTO generated_content (
-                    report_id,
-                    content_type_id,
-                    title,
-                    description,
-                    file_url,
-                    content,
-                    status,
-                    created_at,
-                    updated_at
+                    report_id, content_type_id, title, description,
+                    file_url, content, status, created_at, updated_at
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-            """, (
-                report_id,
-                self.content_type_id,
-                'Generated Image',
-                'AI-generated image for news report',
-                s3_url,
-                prompt,
-                'published'
-            ))
-            
+            """, (report_id, self.content_type_id, 'Generated Image',
+                  'AI-generated image for news report', s3_url, prompt, 'published'))
             self.conn.commit()
             return True
-            
         except Exception as e:
-            print(f"   ❌ Error saving image record: {e}")
+            print(f"   ❌ Error saving: {e}")
             self.conn.rollback()
             return False
     
-    def _update_image_record(
-        self, 
-        content_id: int, 
-        report_id: int, 
-        s3_url: str, 
-        prompt: str
-    ) -> bool:
+    def _update_image_record(self, content_id: int, report_id: int, s3_url: str, prompt: str) -> bool:
         """تحديث سجل الصورة"""
         try:
             self.cursor.execute("""
                 UPDATE generated_content
-                SET file_url = %s,
-                    content = %s,
-                    updated_at = NOW()
+                SET file_url = %s, content = %s, updated_at = NOW()
                 WHERE id = %s
             """, (s3_url, prompt, content_id))
-            
             self.conn.commit()
             return True
-            
         except Exception as e:
-            print(f"   ❌ Error updating image record: {e}")
+            print(f"   ❌ Error updating: {e}")
             self.conn.rollback()
             return False
     
@@ -611,20 +695,16 @@ Style: Realistic photojournalism
 
 
 if __name__ == "__main__":
-    import sys
-    
     if len(sys.argv) > 1 and sys.argv[1].isdigit():
         report_id = int(sys.argv[1])
-        
         generator = ImageGenerator()
         result = generator.generate_for_report(report_id, force_update=True)
         
         if result.success:
-            print(f"\n✅ Success!")
-            print(f"   Image URL: {result.image_url}")
+            print(f"\n✅ Success! Image URL: {result.image_url}")
         else:
             print(f"\n❌ Failed: {result.error_message}")
         
         generator.close()
     else:
-        print("Usage: python -m app.services.image_generator <report_id>")
+        print("Usage: python image_generator.py <report_id>")

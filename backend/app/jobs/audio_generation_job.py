@@ -2,10 +2,8 @@
 """
 🎙️ Audio Generation Job (Condition-Based)
 
-⚠️ لا يوجد تحقق من الوقت!
-   الـ start_worker.py هو المتحكم بالوقت
-
 Condition: يشتغل فقط إذا في تقارير بدون صوت
+Tables: generated_report, generated_content, content_types
 """
 import sys
 import os
@@ -38,16 +36,22 @@ logger = logging.getLogger(__name__)
 def has_reports_without_audio(hours: int = 48) -> tuple:
     """
     ✅ Condition: هل في تقارير جديدة بدون صوت؟
-    Returns: (bool, count)
+    Tables: generated_report, generated_content
     """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
+        # تقارير بدون محتوى من نوع audio
         cursor.execute("""
-            SELECT COUNT(*) FROM reports r
-            WHERE r.created_at >= NOW() - INTERVAL '%s hours'
-            AND (r.audio_url IS NULL OR r.audio_url = '')
+            SELECT COUNT(*) FROM generated_report gr
+            WHERE gr.created_at >= NOW() - INTERVAL '%s hours'
+            AND NOT EXISTS (
+                SELECT 1 FROM generated_content gc
+                JOIN content_types ct ON gc.content_type_id = ct.id
+                WHERE gc.report_id = gr.id
+                AND LOWER(ct.name) IN ('audio', 'صوت', 'voice', 'podcast')
+            )
         """, (hours,))
         
         count = cursor.fetchone()[0]
