@@ -44,6 +44,7 @@ PARALLEL_JOBS = [
     'social_media_generation',
     'image_generation',
     'audio_generation',
+    'reel_generation',
 ]
 
 
@@ -202,7 +203,7 @@ def run_pipeline():
     """
     🔗 Run the complete pipeline with chaining
     
-    Scraping → Clustering → Reports → (Social + Images + Audio)
+    Scraping → Clustering → Reports → (Social + Images + Audio + Reels)
     """
     logger.info("=" * 60)
     logger.info("🔗 Starting Pipeline...")
@@ -258,6 +259,10 @@ def register_default_tasks():
         from app.jobs.audio_generation_job import generate_audio
         generate_audio()
     
+    def reel_generation_task():
+        from app.jobs.reel_generation_job import generate_reels
+        generate_reels()
+    
     # Register all tasks
     register_task('scraping', scraping_task)
     register_task('clustering', clustering_task)
@@ -265,6 +270,7 @@ def register_default_tasks():
     register_task('social_media_generation', social_media_generation_task)
     register_task('image_generation', image_generation_task)
     register_task('audio_generation', audio_generation_task)
+    register_task('reel_generation', reel_generation_task)
 
 
 # ============================================
@@ -313,6 +319,16 @@ def start_scheduler(run_initial: bool = True):
             replace_existing=True
         )
         
+        # Schedule reel generation to run every hour independently
+        scheduler.add_job(
+            execute_job,
+            args=['reel_generation'],
+            trigger=CronTrigger(minute=0),  # Every hour at minute 0
+            id='reel_generation_hourly',
+            name='Reel Generation (Hourly)',
+            replace_existing=True
+        )
+        
         # Start scheduler
         scheduler.start()
         
@@ -321,6 +337,7 @@ def start_scheduler(run_initial: bool = True):
         logger.info("=" * 60)
         logger.info("🔗 Pipeline: Scraping → Clustering → Reports → Generation")
         logger.info(f"⏱️ Schedule: {scraping_task['schedule_pattern'] if scraping_task else '*/10 * * * *'}")
+        logger.info("🎬 Reel Generation: Every hour (0 * * * *)")
         logger.info("=" * 60)
         
         # Run initial pipeline if requested
@@ -360,7 +377,7 @@ def get_scheduler_status() -> Dict:
     
     return {
         "status": "running",
-        "pipeline": "Scraping → Clustering → Reports → (Social + Images + Audio)",
+        "pipeline": "Scraping → Clustering → Reports → (Social + Images + Audio + Reels)",
         "jobs": jobs_info
     }
 
