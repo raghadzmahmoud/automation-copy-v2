@@ -491,24 +491,51 @@ def run_single_cycle() -> Dict:
 # ============================================
 
 if __name__ == "__main__":
+    import signal
+    import sys
+    import os
+    
+    # Setup logging for production
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),  # Log to stdout for Render
+            logging.FileHandler('app/logs/worker.log', encoding='utf-8')
+        ]
     )
     
     logger.info("=" * 70)
-    logger.info("🔄 Continuous Pipeline Scheduler")
+    logger.info("🔄 Continuous Pipeline Scheduler (Production)")
     logger.info("=" * 70)
+    logger.info(f"🌍 Environment: {os.getenv('ENVIRONMENT', 'development')}")
     logger.info(f"📋 Pipeline order: {' → '.join(PIPELINE_ORDER)}")
     logger.info(f"⏱️ Cooldown between cycles: {PIPELINE_COOLDOWN}s")
     logger.info("=" * 70)
     
-    start_pipeline()
+    # Graceful shutdown handler
+    def signal_handler(signum, frame):
+        logger.info("⏹️ Received shutdown signal, stopping pipeline...")
+        stop_pipeline()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
     
     try:
+        start_pipeline()
+        
         # Keep main thread alive
+        logger.info("✅ Worker is running. Press Ctrl+C to stop.")
         while pipeline_running:
             time.sleep(1)
+            
     except KeyboardInterrupt:
-        logger.info("\n⏹️ Shutting down...")
+        logger.info("\n⏹️ Keyboard interrupt received")
         stop_pipeline()
+    except Exception as e:
+        logger.error(f"❌ Worker crashed: {e}")
+        import traceback
+        traceback.print_exc()
+        stop_pipeline()
+        sys.exit(1)

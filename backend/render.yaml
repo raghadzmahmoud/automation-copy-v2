@@ -1,0 +1,94 @@
+# 🚀 Render Configuration for Background Worker
+# Deploy start_worker.py as a background service
+
+services:
+  # Background Worker Service
+  - type: worker
+    name: automation-worker
+    env: docker
+    dockerfilePath: ./Dockerfile.worker
+    dockerContext: ./
+    
+    # Environment variables (values to be set manually in Render Dashboard)
+    envVars:
+      # Database (PostgreSQL - Render Hosted)
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      
+      # Gemini AI
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: "gemini-2.5-flash"
+      - key: GEMINI_IMAGE_MODEL
+        value: "gemini-2.5-flash-image"
+      - key: GEMINI_EXTRACTION_MODEL
+        value: "gemini-2.5-flash-lite"
+      
+      # Application
+      - key: ENVIRONMENT
+        value: "production"
+      - key: DEBUG
+        value: "False"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: SECRET_KEY
+        sync: false
+      
+      # AWS Configuration (for S3 Image Storage)
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        value: "us-east-1"
+      
+      # S3 Bucket Settings
+      - key: S3_BUCKET_NAME
+        sync: false
+      
+      # S3 Folder Structure
+      - key: S3_ORIGINAL_IMAGES_FOLDER
+        value: "original/images/"
+      - key: S3_ORIGINAL_VIDEOS_FOLDER
+        value: "original/videos/"
+      - key: S3_ORIGINAL_AUDIOS_FOLDER
+        value: "original/audios/"
+      - key: S3_GENERATED_IMAGES_FOLDER
+        value: "generated/images/"
+      - key: S3_GENERATED_AUDIOS_FOLDER
+        value: "generated/audios/"
+      - key: S3_GENERATED_VIDEOS_FOLDER
+        value: "generated/videos/"
+      
+      # Google Cloud (for TTS/STT)
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: false
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      
+      # Docker/Python specific
+      - key: PYTHONPATH
+        value: "/app"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    
+    # Resource allocation
+    plan: starter  # or standard/pro based on your needs
+    
+    # Auto-deploy settings
+    autoDeploy: true
+    
+    # Build settings
+    buildCommand: echo "Using Docker build"
+    
+    # Scaling (for worker, usually 1)
+    numInstances: 1
