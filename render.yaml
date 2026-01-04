@@ -6,8 +6,8 @@ services:
   - type: worker
     name: automation-worker
     env: docker
-    dockerfilePath: ./Dockerfile.worker
-    dockerContext: ./
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend/
     
     # Environment variables (values to be set manually in Render Dashboard)
     envVars:
@@ -71,7 +71,7 @@ services:
       
       # Google Cloud (for TTS/STT)
       - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: false
+        value: "./n8nraghad-7fc0064b9857.json"
       - key: GOOGLE_CREDENTIALS_JSON
         sync: false
       
