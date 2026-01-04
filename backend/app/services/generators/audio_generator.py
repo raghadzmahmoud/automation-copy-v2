@@ -276,7 +276,7 @@ class AudioGenerator:
                 
                 voice = texttospeech.VoiceSelectionParams(
                     language_code="ar-XA",
-                    name="ar-XA-Chirp3-HD-Achird",
+                    name="ar-XA-Chirp3-HD-Achernar",
                     ssml_gender=texttospeech.SsmlVoiceGender.MALE
                 )
                 

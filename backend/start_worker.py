@@ -37,6 +37,7 @@ os.environ["SSL_CERT_FILE"] = certifi.where()
 
 logger = logging.getLogger(__name__)
 
+
 # ============================================
 # Configuration
 # ============================================
