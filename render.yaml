@@ -71,7 +71,7 @@ services:
       
       # Google Cloud (for TTS/STT)
       - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: false
+        sync: false
       - key: GOOGLE_CREDENTIALS_JSON
         sync: false
       
