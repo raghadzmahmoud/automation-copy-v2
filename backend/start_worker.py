@@ -1,121 +1,146 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-🔄 Continuous Pipeline Scheduler
+Multi-Threaded Task Scheduler
 ═══════════════════════════════════════════════════════════════
-بسيط ومباشر:
-- كل task تخلص → اللي بعدها تبدأ
-- لما يخلص الكل → نعيد من البداية
-- لا اعتماد على مواعيد cron
+Each task runs independently in its own thread with fixed intervals
+When a task finishes, it starts a timer to run again after its interval
+No database dependency for task configuration
+
+📻 UPDATE: استبدال bulletin_generation + digest_generation
+          بـ broadcast_generation الموحد
 ═══════════════════════════════════════════════════════════════
 """
+
 import certifi
 import os
-os.environ["SSL_CERT_FILE"] = certifi.where()
-
 import psycopg2
 import logging
 import time
 import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Callable
-
 from settings import DB_CONFIG
+import sys
+import signal
+import traceback
+
+# Set SSL certificate environment variable
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
 logger = logging.getLogger(__name__)
 
+
 # ============================================
-# 📋 Pipeline Configuration
+# 📦 Job Imports (Lazy Loading)
 # ============================================
 
-# ترتيب المهام في الـ Pipeline
-PIPELINE_ORDER = [
-    'scraping',              # 1. سحب الأخبار
-    'clustering',            # 2. تجميع الأخبار
-    'report_generation',     # 3. توليد التقارير
-    'image_generation',      # 4. توليد الصور
-    'audio_generation',      # 5. توليد الصوت
-    'bulletin_generation',   # 6. النشرة
-    'digest_generation',     # 7. الموجز
-    'social_media_generation', # 8. سوشيال ميديا
-    'reel_generation',       # 9. توليد الريلز ➕
-]
+def _scraping_task():
+    from app.jobs.scraper_job import scrape_news
+    return scrape_news()
 
-# الفترة بين كل دورة pipeline كاملة (بالثواني)
-PIPELINE_COOLDOWN = 600  # 10 دقائق بعد ما يخلص الكل
+def _clustering_task():
+    from app.jobs.clustering_job import cluster_news
+    return cluster_news()
 
-# Task functions mapping
+def _report_generation_task():
+    from app.jobs.reports_job import generate_reports
+    return generate_reports()
+
+def _image_generation_task():
+    from app.jobs.image_generation_job import generate_images
+    return generate_images()
+
+def _audio_generation_task():
+    from app.jobs.audio_generation_job import generate_audio
+    return generate_audio()
+
+def _broadcast_generation_task():
+    """📻 موحد: نشرة + موجز + صوت"""
+    from app.jobs.broadcast_job import generate_all_broadcasts
+    return generate_all_broadcasts()
+
+def _social_media_task():
+    from app.jobs.social_media_job import generate_social_media_content
+    return generate_social_media_content()
+
+def _reel_generation_task():
+    from app.jobs.reel_generation_job import generate_reels
+    return generate_reels()
+
+
+# ============================================
+# ⚙️ Configuration
+# ============================================
+
+# Task configuration: function and interval in one place
+TASKS = {
+    'scraping': {
+        'func': _scraping_task,
+        'interval': 600,              # 10 minutes
+        'description': 'سحب الأخبار من المصادر'
+    },
+    'clustering': {
+        'func': _clustering_task,
+        'interval': 1800,             # 30 minutes
+        'description': 'تجميع الأخبار المتشابهة'
+    },
+    'report_generation': {
+        'func': _report_generation_task,
+        'interval': 3600,             # 1 hour
+        'description': 'توليد التقارير'
+    },
+    'image_generation': {
+        'func': _image_generation_task,
+        'interval': 3600,             # 1 hour
+        'description': 'توليد الصور'
+    },
+    'audio_generation': {
+        'func': _audio_generation_task,
+        'interval': 3600,             # 1 hour
+        'description': 'توليد الصوت للتقارير'
+    },
+    # ════════════════════════════════════════════════════════════
+    # 📻 Broadcast Generation (موحد - نشرة + موجز + صوت)
+    # يقرأ الإعدادات من جدول broadcast_configs
+    # ════════════════════════════════════════════════════════════
+    'broadcast_generation': {
+        'func': _broadcast_generation_task,
+        'interval': 1800,             # 30 minutes (يفحص كل نصف ساعة)
+        'description': '📻 النشرة + الموجز + الصوت (موحد)'
+    },
+    'social_media_generation': {
+        'func': _social_media_task,
+        'interval': 1800,             # 30 minutes
+        'description': 'توليد محتوى السوشيال ميديا'
+    },
+    'reel_generation': {
+        'func': _reel_generation_task,
+        'interval': 3600,             # 1 hour
+        'description': 'توليد الريلز'
+    }
+}
+
+# Task functions mapping (populated from TASKS)
 TASK_FUNCTIONS: Dict[str, Callable] = {}
 
-# Pipeline state
-pipeline_running = False
-pipeline_thread = None
-stop_flag = threading.Event()
-
-
-# ============================================
-# 📝 Task Registration
-# ============================================
-
-def register_task(task_type: str, func: Callable):
-    """Register a task function"""
-    TASK_FUNCTIONS[task_type] = func
-    logger.info(f"📝 Registered: {task_type}")
+# Scheduler state
+scheduler_running = False
+task_threads: Dict[str, threading.Thread] = {}
+task_stop_flags: Dict[str, threading.Event] = {}
+task_last_run: Dict[str, datetime] = {}
+scheduler_lock = threading.Lock()
 
 
 def register_all_tasks():
-    """Register all task functions"""
-    
-    def scraping_task():
-        from app.jobs.scraper_job import scrape_news
-        return scrape_news()
-    
-    def clustering_task():
-        from app.jobs.clustering_job import cluster_news
-        return cluster_news()
-    
-    def report_generation_task():
-        from app.jobs.reports_job import generate_reports
-        return generate_reports()
-    
-    def image_generation_task():
-        from app.jobs.image_generation_job import generate_images
-        return generate_images()
-    
-    def audio_generation_task():
-        from app.jobs.audio_generation_job import generate_audio
-        return generate_audio()
-    
-    def bulletin_task():
-        from app.jobs.bulletin_digest_job import generate_bulletin_job
-        return generate_bulletin_job()
-    
-    def digest_task():
-        from app.jobs.bulletin_digest_job import generate_digest_job
-        return generate_digest_job()
-    
-    def social_media_task():
-        from app.jobs.social_media_job import generate_social_media_content
-        return generate_social_media_content()
-    
-    # ➕ Reel Generation Task
-    def reel_generation_task():
-        from app.jobs.reel_generation_job import generate_reels
-        return generate_reels()
-    
-    register_task('scraping', scraping_task)
-    register_task('clustering', clustering_task)
-    register_task('report_generation', report_generation_task)
-    register_task('image_generation', image_generation_task)
-    register_task('audio_generation', audio_generation_task)
-    register_task('bulletin_generation', bulletin_task)
-    register_task('digest_generation', digest_task)
-    register_task('social_media_generation', social_media_task)
-    register_task('reel_generation', reel_generation_task)  # ➕
+    """Register all task functions from TASKS configuration"""
+    for task_type, task_config in TASKS.items():
+        TASK_FUNCTIONS[task_type] = task_config['func']
+        logger.info(f"📝 Registered: {task_type} - {task_config.get('description', '')}")
 
 
 # ============================================
-# 🗄️ Database Functions
+# 🗄️ Database Functions (for logging only)
 # ============================================
 
 def get_db_connection():
@@ -127,40 +152,8 @@ def get_db_connection():
         return None
 
 
-def get_active_tasks_from_db() -> List[str]:
-    """
-    Get ordered list of active tasks from database
-    Returns tasks in execution order
-    """
-    conn = get_db_connection()
-    if not conn:
-        return PIPELINE_ORDER  # fallback to default
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT task_type 
-            FROM scheduled_tasks
-            WHERE status = 'active'
-            ORDER BY COALESCE(execution_order, 99), id
-        """)
-        
-        active_tasks = [row[0] for row in cursor.fetchall()]
-        cursor.close()
-        conn.close()
-        
-        # Filter to only tasks we have functions for
-        return [t for t in active_tasks if t in TASK_FUNCTIONS]
-        
-    except Exception as e:
-        logger.error(f"❌ Error fetching tasks: {e}")
-        if conn:
-            conn.close()
-        return PIPELINE_ORDER
-
-
 def update_task_last_run(task_type: str):
-    """Update last_run_at for a task"""
+    """Update last_run_at for a task (optional, for logging)"""
     conn = get_db_connection()
     if not conn:
         return
@@ -178,14 +171,14 @@ def update_task_last_run(task_type: str):
         conn.close()
         
     except Exception as e:
-        logger.error(f"❌ Error updating last_run: {e}")
+        # Silently fail if table doesn't exist or task not in DB
         if conn:
             conn.rollback()
             conn.close()
 
 
 def log_task_execution(task_type: str, status: str, duration: float = 0, error: str = None):
-    """Log task execution"""
+    """Log task execution (optional, for logging)"""
     conn = get_db_connection()
     if not conn:
         return
@@ -213,41 +206,7 @@ def log_task_execution(task_type: str, status: str, duration: float = 0, error: 
         conn.close()
         
     except Exception as e:
-        logger.error(f"❌ Error logging: {e}")
-        if conn:
-            conn.close()
-
-
-def log_pipeline_cycle(cycle_number: int, total_duration: float, results: Dict):
-    """Log complete pipeline cycle"""
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    try:
-        cursor = conn.cursor()
-        
-        # Get or create pipeline task
-        cursor.execute(
-            "SELECT id FROM scheduled_tasks WHERE task_type = 'processing_pipeline'"
-        )
-        row = cursor.fetchone()
-        if row:
-            cursor.execute("""
-                INSERT INTO scheduled_task_logs 
-                (scheduled_task_id, status, execution_time_seconds, result, executed_at)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (row[0], 'completed', total_duration, 
-                  f"Cycle #{cycle_number}: {len(results)} tasks", 
-                  datetime.now(timezone.utc)))
-            
-            conn.commit()
-        
-        cursor.close()
-        conn.close()
-        
-    except Exception as e:
-        logger.error(f"❌ Error logging cycle: {e}")
+        # Silently fail if table doesn't exist
         if conn:
             conn.close()
 
@@ -265,7 +224,7 @@ def execute_task(task_type: str) -> Dict:
         logger.error(f"❌ Unknown task: {task_type}")
         return {'success': False, 'duration': 0, 'error': 'Unknown task'}
     
-    logger.info(f"▶️ Starting: {task_type}")
+    logger.info(f"▶️ [{task_type}] Starting execution...")
     start_time = datetime.now()
     
     try:
@@ -273,11 +232,15 @@ def execute_task(task_type: str) -> Dict:
         result = TASK_FUNCTIONS[task_type]()
         
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"✅ {task_type} completed in {duration:.2f}s")
+        logger.info(f"✅ [{task_type}] Completed in {duration:.2f}s")
         
-        # Update database
+        # Update database (optional, for logging)
         update_task_last_run(task_type)
         log_task_execution(task_type, 'completed', duration)
+        
+        # Update last run time in memory
+        with scheduler_lock:
+            task_last_run[task_type] = datetime.now(timezone.utc)
         
         return {
             'success': True,
@@ -289,9 +252,8 @@ def execute_task(task_type: str) -> Dict:
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
         error_msg = str(e)
-        logger.error(f"❌ {task_type} failed: {error_msg}")
+        logger.error(f"❌ [{task_type}] Failed: {error_msg}")
         
-        import traceback
         traceback.print_exc()
         
         log_task_execution(task_type, 'failed', duration, error_msg)
@@ -304,175 +266,160 @@ def execute_task(task_type: str) -> Dict:
 
 
 # ============================================
-# 🔄 Pipeline Execution
+# 🔄 Task Thread Functions
 # ============================================
 
-def run_pipeline_cycle(cycle_number: int) -> Dict:
+def task_thread_loop(task_type: str, interval_seconds: int):
     """
-    Run one complete pipeline cycle
-    All tasks execute in sequence
+    Main loop for a single task thread
+    Pattern: Run task -> Wait interval -> Repeat
+    When task finishes, timer starts immediately for next run
     """
-    logger.info("=" * 70)
-    logger.info(f"🔄 Pipeline Cycle #{cycle_number} starting...")
-    logger.info("=" * 70)
+    logger.info(f"🚀 [{task_type}] Thread started (interval: {interval_seconds}s = {interval_seconds//60}min)")
     
-    cycle_start = datetime.now()
-    results = {}
-    
-    # Get active tasks in order
-    tasks = get_active_tasks_from_db()
-    
-    # Filter out processing_pipeline (we don't want to run the old one)
-    tasks = [t for t in tasks if t != 'processing_pipeline']
-    
-    logger.info(f"📋 Tasks to execute: {' → '.join(tasks)}")
-    logger.info("-" * 70)
-    
-    for i, task_type in enumerate(tasks, 1):
-        # Check if we should stop
-        if stop_flag.is_set():
-            logger.info("⏹️ Pipeline stopped by user")
-            break
-        
-        logger.info(f"[{i}/{len(tasks)}] {task_type}")
-        
-        # Execute task
-        result = execute_task(task_type)
-        results[task_type] = result
-        
-        # Small delay between tasks to prevent overwhelming
-        if result['success'] and i < len(tasks):
-            time.sleep(2)
-    
-    # Calculate total duration
-    total_duration = (datetime.now() - cycle_start).total_seconds()
-    
-    # Log cycle completion
-    log_pipeline_cycle(cycle_number, total_duration, results)
-    
-    # Print summary
-    logger.info("=" * 70)
-    logger.info(f"🏁 Pipeline Cycle #{cycle_number} completed in {total_duration:.2f}s")
-    logger.info("-" * 70)
-    
-    successful = sum(1 for r in results.values() if r['success'])
-    failed = len(results) - successful
-    
-    for task, result in results.items():
-        status = "✅" if result['success'] else "❌"
-        logger.info(f"   {status} {task}: {result['duration']:.2f}s")
-    
-    logger.info("-" * 70)
-    logger.info(f"   Total: {successful} succeeded, {failed} failed")
-    logger.info("=" * 70)
-    
-    return {
-        'cycle': cycle_number,
-        'duration': total_duration,
-        'results': results,
-        'successful': successful,
-        'failed': failed
-    }
-
-
-def pipeline_loop():
-    """
-    Main pipeline loop - runs continuously
-    """
-    global pipeline_running
-    
-    cycle_number = 0
+    stop_flag = task_stop_flags.get(task_type)
+    if not stop_flag:
+        logger.error(f"❌ [{task_type}] No stop flag found!")
+        return
     
     while not stop_flag.is_set():
-        cycle_number += 1
-        
         try:
-            # Run one cycle
-            run_pipeline_cycle(cycle_number)
+            # Execute the task
+            execute_task(task_type)
             
-            # Cooldown before next cycle (10 minutes)
-            if not stop_flag.is_set():
-                cooldown_minutes = PIPELINE_COOLDOWN // 60
-                logger.info(f"😴 Cooling down for {cooldown_minutes} minutes before next cycle...")
+            # After task finishes, wait for interval before next run
+            # Timer starts immediately after task completion
+            logger.info(f"😴 [{task_type}] Waiting {interval_seconds}s ({interval_seconds//60}min) until next run...")
+            
+            # Wait for interval (checking stop flag every second)
+            for _ in range(interval_seconds):
+                if stop_flag.is_set():
+                    logger.info(f"⏹️ [{task_type}] Thread stopped")
+                    return
+                time.sleep(1)
                 
-                # Sleep in small chunks to allow quick stop
-                for _ in range(PIPELINE_COOLDOWN):
-                    if stop_flag.is_set():
-                        break
-                    time.sleep(1)
-                    
         except Exception as e:
-            logger.error(f"❌ Pipeline cycle error: {e}")
-            import traceback
+            logger.error(f"❌ [{task_type}] Thread error: {e}")
             traceback.print_exc()
             
-            # Wait before retrying
-            time.sleep(30)
+            # Wait 30 seconds before retrying on error
+            logger.info(f"🔄 [{task_type}] Retrying in 30 seconds...")
+            for _ in range(30):
+                if stop_flag.is_set():
+                    return
+                time.sleep(1)
     
-    pipeline_running = False
-    logger.info("⏹️ Pipeline loop ended")
+    logger.info(f"⏹️ [{task_type}] Thread ended")
 
 
 # ============================================
-# 🚀 Pipeline Control
+# 🚀 Scheduler Control
 # ============================================
 
-def start_pipeline():
-    """Start the continuous pipeline"""
-    global pipeline_running, pipeline_thread, stop_flag
+def start_scheduler():
+    """Start the multi-threaded scheduler"""
+    global scheduler_running, task_threads, task_stop_flags
     
-    if pipeline_running:
-        logger.warning("⚠️ Pipeline already running!")
+    if scheduler_running:
+        logger.warning("⚠️ Scheduler already running!")
         return False
     
-    logger.info("🚀 Starting Continuous Pipeline...")
+    logger.info("=" * 70)
+    logger.info("🚀 Starting Multi-Threaded Task Scheduler...")
+    logger.info("=" * 70)
     
-    # Register tasks
+    # Register all tasks
     register_all_tasks()
     
-    # Show registered tasks
-    logger.info(f"📋 Registered tasks: {list(TASK_FUNCTIONS.keys())}")
-    
-    # Reset stop flag
-    stop_flag.clear()
-    
-    # Start pipeline thread
-    pipeline_running = True
-    pipeline_thread = threading.Thread(target=pipeline_loop, daemon=True)
-    pipeline_thread.start()
-    
-    logger.info("✅ Pipeline started!")
-    return True
-
-
-def stop_pipeline():
-    """Stop the pipeline gracefully"""
-    global pipeline_running, stop_flag
-    
-    if not pipeline_running:
-        logger.warning("⚠️ Pipeline not running!")
+    if not TASK_FUNCTIONS:
+        logger.warning("⚠️ No tasks registered!")
         return False
     
-    logger.info("⏹️ Stopping pipeline...")
-    stop_flag.set()
+    # Initialize task threads for all registered tasks
+    scheduler_running = True
     
-    # Wait for thread to finish
-    if pipeline_thread:
-        pipeline_thread.join(timeout=30)
+    for task_type, task_config in TASKS.items():
+        # Get interval and function from TASKS configuration
+        interval = task_config['interval']
+        description = task_config.get('description', '')
+        
+        # Create stop flag for this task
+        task_stop_flags[task_type] = threading.Event()
+        
+        # Start thread for this task
+        thread = threading.Thread(
+            target=task_thread_loop,
+            args=(task_type, interval),
+            daemon=True,
+            name=f"Task-{task_type}"
+        )
+        thread.start()
+        task_threads[task_type] = thread
+        
+        logger.info(f"✅ [{task_type}] Started (interval: {interval//60}min) - {description}")
     
-    pipeline_running = False
-    logger.info("✅ Pipeline stopped!")
+    logger.info("=" * 70)
+    logger.info(f"🎉 Scheduler started with {len(task_threads)} task threads")
+    logger.info("=" * 70)
+    
     return True
 
 
-def get_pipeline_status() -> Dict:
-    """Get current pipeline status"""
+def stop_scheduler():
+    """Stop the scheduler gracefully"""
+    global scheduler_running, task_threads, task_stop_flags
+    
+    if not scheduler_running:
+        logger.warning("⚠️ Scheduler not running!")
+        return False
+    
+    logger.info("⏹️ Stopping scheduler...")
+    
+    # Set all stop flags
+    for task_type, stop_flag in task_stop_flags.items():
+        logger.info(f"⏹️ [{task_type}] Stopping...")
+        stop_flag.set()
+    
+    # Wait for threads to finish (with timeout)
+    for task_type, thread in task_threads.items():
+        thread.join(timeout=30)
+        if thread.is_alive():
+            logger.warning(f"⚠️ [{task_type}] Thread did not stop within timeout")
+        else:
+            logger.info(f"✅ [{task_type}] Thread stopped")
+    
+    scheduler_running = False
+    task_threads.clear()
+    task_stop_flags.clear()
+    task_last_run.clear()
+    
+    logger.info("✅ Scheduler stopped!")
+    return True
+
+
+def get_scheduler_status() -> Dict:
+    """Get current scheduler status"""
+    with scheduler_lock:
+        task_statuses = {}
+        for task_type in task_threads.keys():
+            thread = task_threads.get(task_type)
+            stop_flag = task_stop_flags.get(task_type)
+            task_config = TASKS.get(task_type, {})
+            interval = task_config.get('interval', 3600)
+            
+            task_statuses[task_type] = {
+                'running': thread.is_alive() if thread else False,
+                'interval_seconds': interval,
+                'interval_minutes': interval // 60,
+                'description': task_config.get('description', ''),
+                'last_run': task_last_run.get(task_type),
+                'stopped': stop_flag.is_set() if stop_flag else True
+            }
+    
     return {
-        'running': pipeline_running,
-        'tasks': list(TASK_FUNCTIONS.keys()),
-        'order': PIPELINE_ORDER,
-        'cooldown_seconds': PIPELINE_COOLDOWN,
-        'cooldown_minutes': PIPELINE_COOLDOWN // 60
+        'scheduler_running': scheduler_running,
+        'active_tasks': len(task_threads),
+        'tasks': task_statuses
     }
 
 
@@ -483,16 +430,12 @@ def get_pipeline_status() -> Dict:
 def run_single_task(task_type: str) -> Dict:
     """Manually run a single task"""
     if task_type not in TASK_FUNCTIONS:
-        # Try to register if not registered
         register_all_tasks()
     
+    if task_type not in TASK_FUNCTIONS:
+        return {'success': False, 'duration': 0, 'error': 'Task not registered'}
+    
     return execute_task(task_type)
-
-
-def run_single_cycle() -> Dict:
-    """Manually run a single pipeline cycle"""
-    register_all_tasks()
-    return run_pipeline_cycle(0)
 
 
 # ============================================
@@ -500,16 +443,13 @@ def run_single_cycle() -> Dict:
 # ============================================
 
 if __name__ == "__main__":
-    import signal
-    import sys
-    
     # Setup logging for production
-    log_dir = 'app/logs'
+    log_dir = 'logs'
     os.makedirs(log_dir, exist_ok=True)
     
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout),
             logging.FileHandler(f'{log_dir}/worker.log', encoding='utf-8')
@@ -517,36 +457,49 @@ if __name__ == "__main__":
     )
     
     logger.info("=" * 70)
-    logger.info("🔄 Continuous Pipeline Scheduler")
+    logger.info("🔄 Multi-Threaded Task Scheduler")
     logger.info("=" * 70)
     logger.info(f"🌍 Environment: {os.getenv('ENVIRONMENT', 'development')}")
-    logger.info(f"📋 Pipeline order: {' → '.join(PIPELINE_ORDER)}")
-    logger.info(f"⏱️ Cooldown between cycles: {PIPELINE_COOLDOWN // 60} minutes")
+    logger.info("")
+    logger.info("📋 Tasks Configuration:")
+    for task_type, config in TASKS.items():
+        logger.info(f"   • {task_type}: every {config['interval']//60}min - {config.get('description', '')}")
     logger.info("=" * 70)
     
     # Graceful shutdown handler
     def signal_handler(signum, frame):
-        logger.info("⏹️ Received shutdown signal, stopping pipeline...")
-        stop_pipeline()
+        logger.info("⏹️ Received shutdown signal, stopping scheduler...")
+        stop_scheduler()
         sys.exit(0)
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
     try:
-        start_pipeline()
+        start_scheduler()
         
         # Keep main thread alive
-        logger.info("✅ Worker is running. Press Ctrl+C to stop.")
-        while pipeline_running:
+        logger.info("✅ Scheduler is running. Press Ctrl+C to stop.")
+        while scheduler_running:
             time.sleep(1)
+            
+            # Check if any task thread has unexpectedly stopped
+            with scheduler_lock:
+                dead_threads = []
+                for task_type, thread in task_threads.items():
+                    stop_flag = task_stop_flags.get(task_type, threading.Event())
+                    if not thread.is_alive() and not stop_flag.is_set():
+                        dead_threads.append(task_type)
+            
+            if dead_threads:
+                logger.warning(f"⚠️ Dead threads detected: {dead_threads}")
+                # Could implement auto-restart here if needed
             
     except KeyboardInterrupt:
         logger.info("\n⏹️ Keyboard interrupt received")
-        stop_pipeline()
+        stop_scheduler()
     except Exception as e:
-        logger.error(f"❌ Worker crashed: {e}")
-        import traceback
+        logger.error(f"❌ Scheduler crashed: {e}")
         traceback.print_exc()
-        stop_pipeline()
+        stop_scheduler()
         sys.exit(1)
