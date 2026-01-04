@@ -1,32 +1,30 @@
 #!/usr/bin/env python3
 """
-News Clustering Cron Job
-Runs every hour to cluster similar news articles
-Usage: python cron/clustering_job.py
+🎯 News Clustering Job (Condition-Based)
+
+⚠️ لا يوجد تحقق من الوقت!
+   الـ start_worker.py هو المتحكم بالوقت
+
+Condition: يشتغل فقط إذا في أخبار جديدة غير مجمعة
 """
 import sys
 import os
-
-# Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import psycopg2
 from settings import DB_CONFIG
 from app.config.user_config import user_config
 
-# Ensure logs directory exists at project root
+# Logging setup
 log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
+os.makedirs(log_dir, exist_ok=True)
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        # Use absolute path for log file
         logging.FileHandler(os.path.join(log_dir, 'clustering_job.log'), encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
@@ -34,80 +32,99 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def log_task_execution(status: str, items_count: int = 0, error_message: str = None):
-    """Log cron job execution"""
+# =============================================================================
+# CONDITION CHECK
+# =============================================================================
+
+def has_unclustered_news(hours: int = 48) -> tuple:
+    """
+    ✅ Condition: هل في أخبار جديدة غير مجمعة؟
+    Returns: (bool, count)
+    """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
-        # Get task_id for news_clustering
         cursor.execute("""
-            SELECT id FROM scheduled_tasks 
-            WHERE task_type = 'clustering'
-        """)
+            SELECT COUNT(*) FROM raw_news rn
+            WHERE rn.collected_at >= NOW() - INTERVAL '%s hours'
+            AND NOT EXISTS (
+                SELECT 1 FROM news_cluster_members ncm
+                WHERE ncm.news_id = rn.id
+            )
+        """, (hours,))
         
-        task_id = cursor.fetchone()
-        if not task_id:
-            logger.warning("Task with task_type='clustering' not found in scheduled_tasks")
-            return
-        
-        task_id = task_id[0]
-        
-        # Insert log (adapt to schema)
-        cursor.execute("""
-            INSERT INTO scheduled_task_logs (scheduled_task_id, status, execution_time_seconds, result, error_message, executed_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (task_id, status, 0.0, str(items_count), error_message, datetime.now()))
-        
-        conn.commit()
+        count = cursor.fetchone()[0]
         cursor.close()
         conn.close()
         
+        return count > 0, count
+        
     except Exception as e:
-        logger.error(f"Error logging task execution: {e}")
+        logger.error(f"Error checking unclustered news: {e}")
+        return False, 0
 
 
-def cluster_news():
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def cluster_news() -> dict:
     """Main clustering function"""
     start_time = datetime.now()
+    
     logger.info("=" * 60)
-    logger.info(f"Starting news clustering job at {start_time}")
-    
-    # Check if clustering is enabled
-    if not user_config.clustering_enabled:
-        logger.info("Clustering is disabled in configuration")
-        return
-    
-    try:
-        # Get configuration
-        time_window_days = user_config.clustering_time_window_hours / 24.0
+    logger.info(f"🎯 Clustering Job started at {start_time}")
 
-        logger.info(f"Time window: {user_config.clustering_time_window_hours} hours")
-        logger.info(f"Minimum similarity: {user_config.clustering_min_similarity}")
-        
-        # Import clustering service (lazy import)
+    # Check if enabled
+    if not user_config.clustering_enabled:
+        logger.info("⏭️ Clustering is disabled in configuration")
+        return {'skipped': True, 'reason': 'disabled'}
+
+    # ✅ Condition Check
+    has_work, unclustered_count = has_unclustered_news(hours=48)
+    
+    if not has_work:
+        logger.info("⏭️ No unclustered news found, skipping")
+        logger.info("=" * 60)
+        return {'skipped': True, 'reason': 'no_new_data'}
+    
+    logger.info(f"📊 Found {unclustered_count} unclustered news items")
+
+    try:
         from app.services.processing.clustering import NewsClusterer
-        clusterer = NewsClusterer()
         
-        # Perform incremental clustering
+        time_window_days = user_config.clustering_time_window_hours / 24.0
+        
+        logger.info(f"⚙️ Time window: {user_config.clustering_time_window_hours} hours")
+        logger.info(f"⚙️ Min similarity: {user_config.clustering_min_similarity}")
+        
+        clusterer = NewsClusterer()
         stats = clusterer.cluster_all_news(
             time_limit_days=time_window_days,
             mode='incremental'
         )
         
-        # Log completion
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Clustering completed in {duration:.2f}s")
-        logger.info(f"Total news items processed: {stats.get('total_news', 0)}")
         
-        log_task_execution('completed', stats.get('total_news', 0))
+        logger.info(f"✅ Clustering completed in {duration:.2f}s")
+        logger.info(f"📊 News processed: {stats.get('total_news', 0)}")
+        logger.info(f"📊 Clusters created: {stats.get('clusters_created', 0)}")
+        logger.info("=" * 60)
+        
+        return {
+            'skipped': False,
+            'duration': duration,
+            'stats': stats
+        }
         
     except Exception as e:
-        logger.error(f"Fatal error in clustering job: {e}")
-        log_task_execution('failed', 0, str(e))
-    
-    finally:
+        logger.error(f"❌ Clustering failed: {e}")
+        import traceback
+        traceback.print_exc()
         logger.info("=" * 60)
+        return {'skipped': False, 'error': str(e)}
+
 
 if __name__ == "__main__":
     cluster_news()

@@ -32,6 +32,10 @@ Pillow
 
 google-cloud-texttospeech
 
+# Social Media
+telethon
+playwright
+
 # Video Processing
 moviepy==1.0.3
 google-cloud-speech==2.24.1
