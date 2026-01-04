@@ -31,3 +31,7 @@ boto3==1.34.0
 Pillow 
 
 google-cloud-texttospeech
+
+Pillow  
+arabic-reshaper 
+python-bidi
