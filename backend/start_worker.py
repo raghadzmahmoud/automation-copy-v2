@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-⏰ Database-Driven Task Scheduler
-الـ Database هي المتحكم الأساسي - كل job له schedule خاص فيه
-
-+ 📻 النشرة والموجز (كل 15 و 10 دقائق)
+⏰ Database-Driven Task Scheduler v2.0
+══════════════════════════════════════
+كل Job يتحقق من شرطه قبل التنفيذ
+الـ Database هي المتحكم الأساسي
 """
 import certifi
 import os
@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import psycopg2
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
 
@@ -49,10 +49,6 @@ def register_default_tasks():
         from app.jobs.scraper_job import scrape_news
         scrape_news()
     
-    def processing_pipeline_task():
-        from app.jobs.processing_pipeline_job import run_processing_pipeline
-        run_processing_pipeline()
-    
     def clustering_task():
         from app.jobs.clustering_job import cluster_news
         cluster_news()
@@ -73,7 +69,6 @@ def register_default_tasks():
         from app.jobs.audio_generation_job import generate_audio
         generate_audio()
     
-    # ➕ النشرة والموجز
     def bulletin_task():
         from app.jobs.bulletin_digest_job import generate_bulletin_job
         generate_bulletin_job()
@@ -82,18 +77,13 @@ def register_default_tasks():
         from app.jobs.bulletin_digest_job import generate_digest_job
         generate_digest_job()
     
-    # Register main tasks
+    # Register all tasks
     register_task('scraping', scraping_task)
-    register_task('processing_pipeline', processing_pipeline_task)
-    
-    # Register individual tasks
     register_task('clustering', clustering_task)
     register_task('report_generation', report_generation_task)
     register_task('social_media_generation', social_media_task)
     register_task('image_generation', image_generation_task)
     register_task('audio_generation', audio_generation_task)
-    
-    # ➕ تسجيل النشرة والموجز
     register_task('bulletin_generation', bulletin_task)
     register_task('digest_generation', digest_task)
 
@@ -112,10 +102,7 @@ def get_db_connection():
 
 
 def get_all_active_tasks() -> list:
-    """
-    Get all active tasks from database
-    Returns: List of task dicts with schedule_pattern
-    """
+    """Get all active tasks from database with run_condition and timing info"""
     conn = get_db_connection()
     if not conn:
         return []
@@ -123,10 +110,19 @@ def get_all_active_tasks() -> list:
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, task_type, schedule_pattern, status
+            SELECT 
+                id, 
+                name, 
+                task_type, 
+                schedule_pattern, 
+                status, 
+                COALESCE(run_condition, 'always') as run_condition,
+                COALESCE(min_interval_seconds, 300) as min_interval_seconds,
+                COALESCE(is_running, FALSE) as is_running,
+                last_run_at
             FROM scheduled_tasks
             WHERE status = 'active'
-            ORDER BY id
+            ORDER BY COALESCE(execution_order, 99), id
         """)
         
         tasks = []
@@ -136,7 +132,11 @@ def get_all_active_tasks() -> list:
                 'name': row[1],
                 'task_type': row[2],
                 'schedule_pattern': row[3],
-                'status': row[4]
+                'status': row[4],
+                'run_condition': row[5],
+                'min_interval_seconds': row[6],
+                'is_running': row[7],
+                'last_run_at': row[8]
             })
         
         cursor.close()
@@ -148,6 +148,329 @@ def get_all_active_tasks() -> list:
         if conn:
             conn.close()
         return []
+
+
+# ============================================
+# 🔒 Overlap Protection Functions
+# ============================================
+
+def can_run_task(task_type: str) -> tuple:
+    """
+    تحقق إذا الـ task يقدر يشتغل
+    Returns: (can_run: bool, reason: str)
+    """
+    conn = get_db_connection()
+    if not conn:
+        return True, "no_db_connection"
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                COALESCE(is_running, FALSE) as is_running,
+                last_run_at,
+                COALESCE(min_interval_seconds, 300) as min_interval
+            FROM scheduled_tasks 
+            WHERE task_type = %s
+        """, (task_type,))
+        
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not row:
+            return True, "task_not_found"
+        
+        is_running, last_run_at, min_interval = row
+        
+        # 1️⃣ تحقق إذا شغال حالياً
+        if is_running:
+            return False, "already_running"
+        
+        # 2️⃣ تحقق من الحد الأدنى للفترة الزمنية
+        if last_run_at:
+            elapsed = (datetime.now(timezone.utc) - last_run_at.replace(tzinfo=timezone.utc)).total_seconds()
+            if elapsed < min_interval:
+                return False, f"too_soon (wait {int(min_interval - elapsed)}s)"
+        
+        return True, "ok"
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking can_run: {e}")
+        if conn:
+            conn.close()
+        return True, "error"
+
+
+def set_task_running(task_type: str, is_running: bool):
+    """Set is_running flag for a task"""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cursor = conn.cursor()
+        
+        if is_running:
+            # بداية التشغيل - حدث is_running و last_run_at
+            cursor.execute("""
+                UPDATE scheduled_tasks 
+                SET is_running = TRUE, last_run_at = %s
+                WHERE task_type = %s
+            """, (datetime.now(timezone.utc), task_type))
+        else:
+            # نهاية التشغيل - حدث is_running فقط
+            cursor.execute("""
+                UPDATE scheduled_tasks 
+                SET is_running = FALSE
+                WHERE task_type = %s
+            """, (task_type,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"❌ Error setting task running state: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+
+
+def cleanup_stuck_tasks():
+    """تنظيف الـ tasks اللي علقت بـ is_running = true"""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE scheduled_tasks 
+            SET is_running = FALSE 
+            WHERE is_running = TRUE 
+            AND last_run_at < NOW() - INTERVAL '1 hour'
+            RETURNING task_type
+        """)
+        
+        stuck = cursor.fetchall()
+        if stuck:
+            logger.warning(f"⚠️ Cleaned up {len(stuck)} stuck tasks: {[s[0] for s in stuck]}")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"❌ Error cleaning stuck tasks: {e}")
+        if conn:
+            conn.close()
+
+
+# ============================================
+# ✅ Run Condition Checker
+# ============================================
+
+def check_run_condition(condition: str) -> bool:
+    """
+    تحقق من شرط التشغيل
+    Returns: True إذا الشرط متحقق ولازم يشتغل
+    """
+    if condition == 'always':
+        return True
+    
+    conn = get_db_connection()
+    if not conn:
+        logger.warning(f"⚠️ Cannot check condition (no DB), assuming True")
+        return True
+    
+    try:
+        cursor = conn.cursor()
+        result = False
+        
+        # ═══════════════════════════════════════════════════════
+        # 📰 شروط الأخبار والتجميع
+        # ═══════════════════════════════════════════════════════
+        
+        if condition == 'has_unclustered_news':
+            # أخبار جديدة لم تُجمّع بعد (آخر 2 ساعة)
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM raw_news rn
+                    WHERE rn.collected_at >= NOW() - INTERVAL '2 hours'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM news_cluster_members ncm 
+                        WHERE ncm.news_id = rn.id
+                    )
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        elif condition == 'has_clusters_without_reports':
+            # Clusters بدون تقارير (آخر 3 ساعات)
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM news_clusters nc
+                    WHERE nc.created_at >= NOW() - INTERVAL '3 hours'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM generated_report gr 
+                        WHERE gr.cluster_id = nc.id
+                    )
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        # ═══════════════════════════════════════════════════════
+        # 📝 شروط التقارير
+        # ═══════════════════════════════════════════════════════
+        
+        elif condition == 'has_reports_without_images':
+            # تقارير بدون صور (آخر 6 ساعات)
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report gr
+                    WHERE gr.created_at >= NOW() - INTERVAL '6 hours'
+                    AND gr.status = 'ready'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM generated_content gc 
+                        WHERE gc.report_id = gr.id 
+                        AND gc.content_type_id = (
+                            SELECT id FROM content_types WHERE name = 'image' LIMIT 1
+                        )
+                    )
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        elif condition == 'has_reports_without_audio':
+            # تقارير بدون صوت (آخر 6 ساعات)
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report gr
+                    WHERE gr.created_at >= NOW() - INTERVAL '6 hours'
+                    AND gr.status = 'ready'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM generated_content gc 
+                        WHERE gc.report_id = gr.id 
+                        AND gc.content_type_id = (
+                            SELECT id FROM content_types WHERE name = 'audio' LIMIT 1
+                        )
+                    )
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        elif condition == 'has_reports_without_social':
+            # تقارير بدون محتوى سوشيال ميديا
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report gr
+                    WHERE gr.created_at >= NOW() - INTERVAL '6 hours'
+                    AND gr.status = 'ready'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM generated_content gc 
+                        WHERE gc.report_id = gr.id 
+                        AND gc.content_type_id = (
+                            SELECT id FROM content_types WHERE name = 'social_media' LIMIT 1
+                        )
+                    )
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        # ═══════════════════════════════════════════════════════
+        # 📻 شروط النشرة والموجز
+        # ═══════════════════════════════════════════════════════
+        
+        elif condition == 'has_recent_reports':
+            # تقارير جديدة خلال آخر 30 دقيقة
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report 
+                    WHERE created_at >= NOW() - INTERVAL '30 minutes'
+                    AND status = 'ready'
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        elif condition == 'has_recent_reports_10m':
+            # تقارير جديدة خلال آخر 10 دقائق (للموجز)
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report 
+                    WHERE created_at >= NOW() - INTERVAL '12 minutes'
+                    AND status = 'ready'
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        elif condition == 'has_recent_reports_15m':
+            # تقارير جديدة خلال آخر 15 دقيقة (للنشرة)
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report 
+                    WHERE created_at >= NOW() - INTERVAL '17 minutes'
+                    AND status = 'ready'
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        elif condition == 'has_reports_for_digest':
+            # تقارير لم تُضاف لموجز بعد
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report gr
+                    WHERE gr.created_at >= NOW() - INTERVAL '1 hour'
+                    AND gr.status = 'ready'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM digest_reports dr 
+                        WHERE dr.report_id = gr.id
+                        AND dr.created_at >= NOW() - INTERVAL '1 hour'
+                    )
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        elif condition == 'has_reports_for_bulletin':
+            # تقارير لم تُضاف لنشرة بعد
+            cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM generated_report gr
+                    WHERE gr.created_at >= NOW() - INTERVAL '2 hours'
+                    AND gr.status = 'ready'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM bulletin_reports br 
+                        WHERE br.report_id = gr.id
+                        AND br.created_at >= NOW() - INTERVAL '2 hours'
+                    )
+                    LIMIT 1
+                )
+            """)
+            result = cursor.fetchone()[0]
+        
+        else:
+            # شرط غير معروف - نفترض True
+            logger.warning(f"⚠️ Unknown condition: {condition}, assuming True")
+            result = True
+        
+        cursor.close()
+        conn.close()
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking condition '{condition}': {e}")
+        if conn:
+            conn.close()
+        return True  # في حالة الخطأ، نشغل المهمة
 
 
 def update_task_last_run(task_type: str):
@@ -175,7 +498,8 @@ def update_task_last_run(task_type: str):
             conn.close()
 
 
-def log_task_execution(task_type: str, status: str, duration: float = 0, error: str = None):
+def log_task_execution(task_type: str, status: str, duration: float = 0, 
+                       error: str = None, skipped_reason: str = None):
     """Log task execution to scheduled_task_logs"""
     conn = get_db_connection()
     if not conn:
@@ -191,13 +515,16 @@ def log_task_execution(task_type: str, status: str, duration: float = 0, error: 
         )
         row = cursor.fetchone()
         if not row:
+            conn.close()
             return
+        
+        result_text = skipped_reason if skipped_reason else None
         
         cursor.execute("""
             INSERT INTO scheduled_task_logs 
-            (scheduled_task_id, status, execution_time_seconds, error_message, executed_at)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (row[0], status, duration, error, datetime.now()))
+            (scheduled_task_id, status, execution_time_seconds, result, error_message, executed_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (row[0], status, duration, result_text, error, datetime.now(timezone.utc)))
         
         conn.commit()
         cursor.close()
@@ -210,20 +537,41 @@ def log_task_execution(task_type: str, status: str, duration: float = 0, error: 
 
 
 # ============================================
-# ⚙️ Job Execution
+# ⚙️ Job Execution with Condition Check
 # ============================================
 
-def execute_task(task_type: str):
+def execute_task_with_condition(task_type: str, run_condition: str = 'always'):
     """
-    Execute a single task
+    Execute a task ONLY if:
+    1. It's not already running
+    2. Minimum interval has passed
+    3. Its condition is met
     """
+    # 1️⃣ تحقق من التداخل أولاً
+    can_run, reason = can_run_task(task_type)
+    if not can_run:
+        logger.info(f"⏭️ Skipping {task_type}: {reason}")
+        log_task_execution(task_type, 'skipped', 0, skipped_reason=reason)
+        return False
+    
+    # 2️⃣ تحقق من الشرط
+    if not check_run_condition(run_condition):
+        logger.info(f"⏭️ Skipping {task_type}: condition '{run_condition}' not met")
+        log_task_execution(task_type, 'skipped', 0, skipped_reason=f"Condition not met: {run_condition}")
+        return False
+    
+    # 3️⃣ علّم الـ task كـ running
+    set_task_running(task_type, True)
+    
+    # 4️⃣ نفذ المهمة
     job_func = TASK_FUNCTIONS.get(task_type)
     
     if not job_func:
         logger.error(f"❌ No function registered for: {task_type}")
+        set_task_running(task_type, False)
         return False
     
-    logger.info(f"▶️ Starting: {task_type}")
+    logger.info(f"▶️ Starting: {task_type} (condition: {run_condition} ✓)")
     start_time = datetime.now()
     
     try:
@@ -232,7 +580,6 @@ def execute_task(task_type: str):
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(f"✅ {task_type} completed in {duration:.2f}s")
         
-        update_task_last_run(task_type)
         log_task_execution(task_type, 'completed', duration)
         return True
         
@@ -245,12 +592,16 @@ def execute_task(task_type: str):
         
         log_task_execution(task_type, 'failed', duration, str(e))
         return False
+        
+    finally:
+        # 5️⃣ دائماً علّم الـ task كـ not running
+        set_task_running(task_type, False)
 
 
-def create_job_wrapper(task_type: str):
-    """Create a wrapper function for a task"""
+def create_job_wrapper(task_type: str, run_condition: str = 'always'):
+    """Create a wrapper function for a task with its condition"""
     def wrapper():
-        execute_task(task_type)
+        execute_task_with_condition(task_type, run_condition)
     return wrapper
 
 
@@ -259,14 +610,7 @@ def create_job_wrapper(task_type: str):
 # ============================================
 
 def parse_cron_pattern(pattern: str) -> Dict:
-    """
-    Parse cron pattern to APScheduler CronTrigger args
-    Format: minute hour day month day_of_week
-    Examples:
-        "0 * * * *"     = every hour at :00
-        "*/30 * * * *"  = every 30 minutes
-        "0 */2 * * *"   = every 2 hours
-    """
+    """Parse cron pattern to APScheduler CronTrigger args"""
     parts = pattern.strip().split()
     
     if len(parts) != 5:
@@ -288,11 +632,14 @@ def parse_cron_pattern(pattern: str) -> Dict:
 
 def start_scheduler(run_initial: bool = False):
     """
-    Start scheduler - reads ALL tasks from DB and schedules each one
+    Start scheduler - reads ALL tasks from DB including conditions
     """
     try:
         # Register task functions
         register_default_tasks()
+        
+        # تنظيف الـ tasks اللي علقت
+        cleanup_stuck_tasks()
         
         # Get all active tasks from database
         tasks = get_all_active_tasks()
@@ -300,15 +647,16 @@ def start_scheduler(run_initial: bool = False):
         if not tasks:
             logger.warning("⚠️ No active tasks found in database!")
         
-        logger.info("=" * 60)
-        logger.info("📋 Loading tasks from database...")
-        logger.info("=" * 60)
+        logger.info("=" * 70)
+        logger.info("📋 Loading tasks from database (with conditions)...")
+        logger.info("=" * 70)
         
-        # Schedule each task with its own cron pattern
+        # Schedule each task with its own cron pattern AND condition
         for task in tasks:
             task_type = task['task_type']
             schedule = task['schedule_pattern']
             name = task['name']
+            condition = task.get('run_condition', 'always')
             
             if task_type not in TASK_FUNCTIONS:
                 logger.warning(f"⚠️ Unknown task_type: {task_type}, skipping")
@@ -316,66 +664,37 @@ def start_scheduler(run_initial: bool = False):
             
             cron_args = parse_cron_pattern(schedule)
             
+            # Create wrapper with condition
             scheduler.add_job(
-                create_job_wrapper(task_type),
+                create_job_wrapper(task_type, condition),
                 trigger=CronTrigger(**cron_args),
                 id=task_type,
                 name=name,
                 replace_existing=True
             )
             
-            logger.info(f"   ✅ {name} ({task_type}): {schedule}")
-        
-        # ════════════════════════════════════════════════════════════
-        # ➕ جدولة النشرة والموجز (hardcoded schedules)
-        # ════════════════════════════════════════════════════════════
-        
-        # 📻 النشرة: كل 15 دقيقة
-        scheduler.add_job(
-            create_job_wrapper('bulletin_generation'),
-            trigger=CronTrigger(minute='*/15'),
-            id='bulletin_trigger',
-            name='📻 Bulletin Generator (Every 15 min)',
-            replace_existing=True
-        )
-        logger.info("   ✅ 📻 Bulletin Generator: */15 * * * *")
-        
-        # 📰 الموجز: كل 10 دقائق
-        scheduler.add_job(
-            create_job_wrapper('digest_generation'),
-            trigger=CronTrigger(minute='*/10'),
-            id='digest_trigger',
-            name='📰 Digest Generator (Every 10 min)',
-            replace_existing=True
-        )
-        logger.info("   ✅ 📰 Digest Generator: */10 * * * *")
-        
-        # ════════════════════════════════════════════════════════════
+            logger.info(f"   ✅ {name}")
+            logger.info(f"      Schedule: {schedule} | Min interval: {task.get('min_interval_seconds', 300)}s")
+            logger.info(f"      Condition: {condition}")
         
         # Start scheduler
         scheduler.start()
         
-        logger.info("=" * 60)
+        logger.info("=" * 70)
         logger.info("⏰ Scheduler started!")
-        logger.info("=" * 60)
+        logger.info("=" * 70)
         
         # Show next run times
         for job in scheduler.get_jobs():
             next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M:%S") if job.next_run_time else "N/A"
-            logger.info(f"   📅 {job.name}: next run at {next_run}")
+            logger.info(f"   📅 {job.name}: next at {next_run}")
         
-        logger.info("=" * 60)
+        logger.info("=" * 70)
         
         # Run initial tasks if requested
         if run_initial:
             logger.info("🚀 Running initial scraping...")
-            execute_task('scraping')
-            
-            # ➕ توليد أولي للنشرة والموجز
-            logger.info("📻 Running initial bulletin...")
-            execute_task('bulletin_generation')
-            logger.info("📰 Running initial digest...")
-            execute_task('digest_generation')
+            execute_task_with_condition('scraping', 'always')
             
     except Exception as e:
         logger.error(f"❌ Failed to start scheduler: {e}")
@@ -394,9 +713,7 @@ def stop_scheduler():
 
 
 def reload_schedules():
-    """
-    Reload schedules from database (call this after DB changes)
-    """
+    """Reload schedules from database"""
     logger.info("🔄 Reloading schedules from database...")
     
     # Remove all existing jobs
@@ -410,6 +727,7 @@ def reload_schedules():
         task_type = task['task_type']
         schedule = task['schedule_pattern']
         name = task['name']
+        condition = task.get('run_condition', 'always')
         
         if task_type not in TASK_FUNCTIONS:
             continue
@@ -417,53 +735,43 @@ def reload_schedules():
         cron_args = parse_cron_pattern(schedule)
         
         scheduler.add_job(
-            create_job_wrapper(task_type),
+            create_job_wrapper(task_type, condition),
             trigger=CronTrigger(**cron_args),
             id=task_type,
             name=name,
             replace_existing=True
         )
         
-        logger.info(f"   ✅ Reloaded: {name} ({schedule})")
-    
-    # ➕ Re-add bulletin and digest jobs
-    scheduler.add_job(
-        create_job_wrapper('bulletin_generation'),
-        trigger=CronTrigger(minute='*/15'),
-        id='bulletin_trigger',
-        name='📻 Bulletin Generator (Every 15 min)',
-        replace_existing=True
-    )
-    
-    scheduler.add_job(
-        create_job_wrapper('digest_generation'),
-        trigger=CronTrigger(minute='*/10'),
-        id='digest_trigger',
-        name='📰 Digest Generator (Every 10 min)',
-        replace_existing=True
-    )
+        logger.info(f"   ✅ Reloaded: {name} ({schedule}) [condition: {condition}]")
     
     logger.info("🔄 Reload complete!")
 
 
 def get_scheduler_status() -> Dict:
-    """Get current scheduler status"""
+    """Get current scheduler status with detailed info"""
     if not scheduler.running:
         return {"status": "stopped", "jobs": []}
     
+    # Get tasks info from DB
+    tasks = get_all_active_tasks()
+    tasks_info = {t['task_type']: t for t in tasks}
+    
     jobs_info = []
     for job in scheduler.get_jobs():
+        task_data = tasks_info.get(job.id, {})
         jobs_info.append({
             "id": job.id,
             "name": job.name,
             "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-            "trigger": str(job.trigger)
+            "trigger": str(job.trigger),
+            "condition": task_data.get('run_condition', 'always'),
+            "is_running": task_data.get('is_running', False),
+            "last_run": task_data.get('last_run_at').isoformat() if task_data.get('last_run_at') else None
         })
     
     return {
         "status": "running",
-        "bulletin": "Every 15 minutes",
-        "digest": "Every 10 minutes",
+        "jobs_count": len(jobs_info),
         "jobs": jobs_info
     }
 
@@ -472,36 +780,107 @@ def get_scheduler_status() -> Dict:
 # 🔧 Manual Triggers
 # ============================================
 
-def run_task_now(task_type: str) -> bool:
+def run_task_now(task_type: str, ignore_condition: bool = False) -> bool:
     """Manually trigger a specific task"""
     if task_type not in TASK_FUNCTIONS:
         logger.error(f"❌ Unknown task_type: {task_type}")
         return False
     
     logger.info(f"🔧 Manually triggering: {task_type}")
-    executor.submit(execute_task, task_type)
+    
+    condition = 'always' if ignore_condition else get_task_condition(task_type)
+    executor.submit(execute_task_with_condition, task_type, condition)
     return True
 
 
+def get_task_condition(task_type: str) -> str:
+    """Get the run_condition for a task from DB"""
+    conn = get_db_connection()
+    if not conn:
+        return 'always'
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COALESCE(run_condition, 'always') FROM scheduled_tasks WHERE task_type = %s",
+            (task_type,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return row[0] if row else 'always'
+    except:
+        return 'always'
+
+
 def run_all_tasks_now():
-    """Manually trigger all tasks"""
+    """Manually trigger all active tasks"""
     logger.info("🔧 Manually triggering all tasks...")
     tasks = get_all_active_tasks()
     for task in tasks:
-        executor.submit(execute_task, task['task_type'])
+        executor.submit(
+            execute_task_with_condition, 
+            task['task_type'], 
+            task.get('run_condition', 'always')
+        )
 
 
-# ➕ Manual triggers للنشرة والموجز
-def run_bulletin_now():
-    """Manually trigger bulletin generation"""
-    logger.info("🔧 Manually triggering bulletin...")
-    return run_task_now('bulletin_generation')
+# ============================================
+# 📊 Status Check Functions
+# ============================================
+
+def check_all_conditions() -> Dict:
+    """Check all conditions and return their status"""
+    conditions = [
+        'has_unclustered_news',
+        'has_clusters_without_reports',
+        'has_reports_without_images',
+        'has_reports_without_audio',
+        'has_reports_without_social',
+        'has_recent_reports',
+        'has_recent_reports_10m',
+        'has_recent_reports_15m',
+        'has_reports_for_digest',
+        'has_reports_for_bulletin'
+    ]
+    
+    results = {}
+    for cond in conditions:
+        results[cond] = check_run_condition(cond)
+    
+    return results
 
 
-def run_digest_now():
-    """Manually trigger digest generation"""
-    logger.info("🔧 Manually triggering digest...")
-    return run_task_now('digest_generation')
+def get_running_tasks() -> list:
+    """Get list of currently running tasks"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT task_type, last_run_at 
+            FROM scheduled_tasks 
+            WHERE is_running = TRUE
+        """)
+        
+        running = []
+        for row in cursor.fetchall():
+            running.append({
+                'task_type': row[0],
+                'started_at': row[1]
+            })
+        
+        cursor.close()
+        conn.close()
+        return running
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting running tasks: {e}")
+        if conn:
+            conn.close()
+        return []
 
 
 # ============================================
@@ -516,7 +895,25 @@ if __name__ == "__main__":
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    logger.info("🚀 Starting Database-Driven Scheduler")
+    logger.info("🚀 Starting Database-Driven Scheduler v2.0")
+    logger.info("=" * 70)
+    
+    # Show current conditions
+    logger.info("📋 Current conditions status:")
+    conditions = check_all_conditions()
+    for cond, status in conditions.items():
+        emoji = "✅" if status else "❌"
+        logger.info(f"   {emoji} {cond}: {status}")
+    
+    logger.info("=" * 70)
+    
+    # Show running tasks (if any stuck)
+    running = get_running_tasks()
+    if running:
+        logger.warning(f"⚠️ Found {len(running)} running tasks (will cleanup):")
+        for t in running:
+            logger.warning(f"   - {t['task_type']} (started: {t['started_at']})")
+    
     start_scheduler(run_initial=False)
     
     try:
