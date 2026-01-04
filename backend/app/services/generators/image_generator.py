@@ -339,85 +339,105 @@ class ImageGenerator:
         return stats
     
     def _create_image_prompt(self, report: Dict) -> str:
-        """Create a neutral, generic news illustration image prompt"""
+        """إنشاء prompt عربي لتوليد صورة إخبارية عامة"""
 
-        keywords = self._extract_keywords(report['title'], report['content'])
-        context = ", ".join(keywords[:3])
-
+        title = report['title']
+        content = report['content']
+            
+        keywords = self._extract_keywords(title, content)
+        keywords_str = "، ".join(keywords[:5])
+            
         prompt = f"""
-    Create a neutral, realistic, high-quality news illustration image.
+        أنشئ صورة إخبارية احترافية وواقعية تعبّر عن الفكرة العامة للخبر بأسلوب محايد.
 
-    Context (for understanding only, do NOT visualize text or symbols):
-    {context}
+        العنوان (للسياق فقط):
+        {title}
 
-    Image Requirements:
-    - Generic and neutral visual representation
-    - No text, captions, signs, or written elements
-    - No political symbols, flags, or logos
-    - No identifiable people or faces
-    - No dramatic or emotional emphasis
-    - No exaggeration or sensationalism
+        الموضوع:
+        {keywords_str}
 
-    Visual Style:
-    - Realistic photojournalism
-    - Professional news broadcast aesthetic
-    - Calm, balanced composition
-    - Natural lighting
-    - Clean background or relevant environment
-    - Documentary-style realism
+        المتطلبات:
+        - صورة واقعية وعالية الجودة
+        - أسلوب صحفي احترافي
+        - مناسبة للاستخدام الإخباري
+        - ممنوع وجود أي كتابة داخل الصورة نهائياً (لا نصوص، لا حروف، لا أرقام، لا رموز لغوية)
+        - بدون علامات مائية
+        - بدون وجوه أو أشخاص يمكن التعرف عليهم
+        - تكوين متوازن وبسيط
+        - إضاءة طبيعية واحترافية
+        - دقة عالية مناسبة للنشر
 
-    Framing:
-    - Wide horizontal shot (16:9)
-    - Suitable as a background image for news content
-    - Contextual but non-specific
+        الحجم:
+        أفقي (16:9)
 
-    Important:
-    - The image must NOT depict specific events, locations, or individuals
-    - The image should feel illustrative, general, and unbiased
-    """
-
+        الأسلوب:
+        تصوير صحفي واقعي
+        """
         return prompt
+
 
     
     def _create_simple_prompt(self, report: Dict) -> str:
-        """✅ Prompt أبسط للـ fallback"""
-        keywords = self._extract_keywords(report['title'], report['content'])
-        main_topic = keywords[0] if keywords else "news"
-        
-        return f"""Create a simple professional news image about: {main_topic}
+        """✅ برومت عربي بسيط للـ fallback"""
 
-Style: Clean, professional, news-style
-Format: Horizontal 16:9
-No text, no faces, no watermarks
-"""
-    
+        keywords = self._extract_keywords(report['title'], report['content'])
+        main_topic = keywords[0] if keywords else "خبر عام"
+            
+        return f"""
+            أنشئ صورة إخبارية بسيطة واحترافية تعبّر عن فكرة عامة مرتبطة بالموضوع التالي:
+            {main_topic}
+
+            الأسلوب:
+            - أسلوب إخباري نظيف واحترافي
+            - صورة عامة وغير تفصيلية
+
+            المتطلبات:
+            - ممنوع وجود أي كتابة داخل الصورة نهائياً (لا نصوص، لا حروف، لا أرقام)
+            - بدون وجوه أو أشخاص يمكن التعرف عليهم
+            - بدون علامات مائية
+
+            الإطار:
+            - أفقي (16:9)
+            """
+
     def _extract_keywords(self, title: str, content: str) -> List[str]:
-        """استخراج كلمات مفتاحية"""
+        """استخراج كلمات مفتاحية من العنوان والمحتوى"""
+        import re
+        
+        # كلمات الإيقاف العربية
         stop_words = {
-            'في', 'من', 'إلى', 'على', 'عن', 'مع', 'بعد', 'قبل',
-            'أن', 'ال', 'و', 'أو', 'هذا', 'هذه', 'ذلك', 'التي', 'الذي'
+            'في', 'من', 'إلى', 'على', 'عن', 'مع', 'بعد', 'قبل', 'أن', 'إن', 'كان', 'كانت',
+            'هذا', 'هذه', 'ذلك', 'تلك', 'التي', 'الذي', 'التي', 'اللذان', 'اللتان', 'اللذين',
+            'اللتين', 'اللواتي', 'اللاتي', 'الذين', 'اللواتي', 'ما', 'لا', 'لم', 'لن', 'قد',
+            'قال', 'قالت', 'أضاف', 'أضافت', 'أكد', 'أكدت', 'أشار', 'أشارت', 'ذكر', 'ذكرت',
+            'وقال', 'وقالت', 'وأضاف', 'وأضافت', 'وأكد', 'وأكدت', 'وأشار', 'وأشارت',
+            'كما', 'أيضا', 'أيضاً', 'كذلك', 'بينما', 'حيث', 'عند', 'عندما', 'لدى', 'لديه',
+            'لديها', 'معه', 'معها', 'منه', 'منها', 'إليه', 'إليها', 'عليه', 'عليها',
+            'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'
         }
         
+        # دمج النصوص
         text = f"{title} {content}"
+        
+        # تنظيف النص
+        text = re.sub(r'[^\w\s\u0600-\u06FF]', ' ', text)  # إبقاء الأحرف العربية والإنجليزية فقط
+        text = re.sub(r'\s+', ' ', text)  # إزالة المسافات الزائدة
+        
+        # تقسيم إلى كلمات
         words = text.split()
         
+        # فلترة الكلمات
         keywords = []
         for word in words:
-            cleaned = word.strip('.,،؛:!؟"\'()')
-            if len(cleaned) > 3 and cleaned not in stop_words:
-                keywords.append(cleaned)
+            word = word.strip()
+            if (len(word) >= 3 and 
+                word.lower() not in stop_words and 
+                not word.isdigit() and
+                word not in keywords):  # تجنب التكرار
+                keywords.append(word)
         
-        seen = set()
-        unique_keywords = []
-        for kw in keywords:
-            if kw not in seen:
-                unique_keywords.append(kw)
-                seen.add(kw)
-            if len(unique_keywords) >= 10:
-                break
-        
-        return unique_keywords
-    
+        return keywords[:10]  # أول 10 كلمات مفتاحية
+
     def _generate_and_upload_image(
         self, 
         prompt: str, 

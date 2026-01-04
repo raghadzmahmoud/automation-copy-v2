@@ -2,5 +2,6 @@
     "python.analysis.extraPaths": [
         "./backend/services/news-report-generator/app/api",
         "./backend/app"
-    ]
+    ],
+    "kiroAgent.configureMCP": "Disabled"
 }

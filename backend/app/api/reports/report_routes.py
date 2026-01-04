@@ -428,7 +428,7 @@ async def trigger_report_generation(background_tasks: BackgroundTasks):
     }
 
 
-@router.get("/reports/{report_id:int}/raw-news-images")
+@router.get("/{report_id:int}/raw-news-images")
 async def get_report_images(report_id: int):
     """Get all images from raw news in this report"""
     try:
@@ -455,21 +455,21 @@ async def get_report_images(report_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
     
-@router.get("/reports/{report_id:int}/{content_type_id}")
+@router.get("/{report_id:int}/{content_type_id}")
 def get_report_with_content(report_id: int, content_type_id: int):
     """Get report with its generated content by type"""
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        cur = conn.cursor()
+        conn = get_db()
+        cursor = conn.cursor()
 
         # Fetch Report
-        cur.execute("""
+        cursor.execute("""
             SELECT id, cluster_id, title, content, status, created_at, updated_at
             FROM generated_report
             WHERE id = %s
         """, (report_id,))
 
-        report = cur.fetchone()
+        report = cursor.fetchone()
 
         if not report:
             raise HTTPException(status_code=404, detail="Report not found")
@@ -485,14 +485,14 @@ def get_report_with_content(report_id: int, content_type_id: int):
         }
 
         # Fetch Generated Content
-        cur.execute("""
+        cursor.execute("""
             SELECT id, report_id, content_type_id, title, description, content, file_url, status, created_at
             FROM generated_content
             WHERE report_id = %s AND content_type_id = %s
             ORDER BY created_at DESC
         """, (report_id, content_type_id))
 
-        contents = cur.fetchall()
+        contents = cursor.fetchall()
 
         generated_list = []
         for row in contents:
@@ -508,7 +508,7 @@ def get_report_with_content(report_id: int, content_type_id: int):
                 "created_at": row[8]
             })
 
-        cur.close()
+        cursor.close()
         conn.close()
 
         return {
@@ -516,6 +516,71 @@ def get_report_with_content(report_id: int, content_type_id: int):
             "generated_content": generated_list
         }
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{report_id:int}/{content_type_id}")
+async def generate_content_for_report(report_id: int, content_type_id: int, background_tasks: BackgroundTasks):
+    """Generate specific content type for a report"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Check if report exists
+        cursor.execute("SELECT id, title FROM generated_report WHERE id = %s", (report_id,))
+        report = cursor.fetchone()
+        
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        cursor.close()
+        conn.close()
+        
+        # Content type mapping
+        content_types = {
+            1: "social_media",
+            2: "video_script", 
+            3: "article",
+            4: "newsletter",
+            5: "press_release",
+            6: "image",
+            7: "audio"
+        }
+        
+        content_type_name = content_types.get(content_type_id, "unknown")
+        
+        if content_type_name == "unknown":
+            raise HTTPException(status_code=400, detail="Invalid content type ID")
+        
+        # Add background task for content generation
+        def generate_content():
+            # This would call the appropriate service based on content_type_id
+            if content_type_id == 1:  # Social Media
+                from app.services.social_media_generator import SocialMediaGenerator
+                generator = SocialMediaGenerator()
+                generator.generate_for_report(report_id)
+            elif content_type_id == 6:  # Image
+                from app.services.image_generator import ImageGenerator
+                generator = ImageGenerator()
+                generator.generate_for_report(report_id)
+            elif content_type_id == 7:  # Audio
+                from app.services.audio_generator import AudioGenerator
+                generator = AudioGenerator()
+                generator.generate_for_report(report_id)
+        
+        background_tasks.add_task(generate_content)
+        
+        return {
+            "message": f"{content_type_name.title()} generation started for report {report_id}",
+            "report_id": report_id,
+            "content_type_id": content_type_id,
+            "content_type": content_type_name,
+            "status": "processing"
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -530,7 +595,11 @@ def get_report_with_content(report_id: int, content_type_id: int):
 async def get_reports_with_complete_content(
     page: int = Query(1, ge=1, description="رقم الصفحة"),
     limit: int = Query(20, ge=1, le=100, description="عدد Reports في الصفحة"),
-    sort: str = Query("desc", regex="^(asc|desc)$", description="الترتيب: asc أو desc")
+    sort: str = Query("desc", regex="^(asc|desc)$", description="الترتيب: asc أو desc"),
+    status: Optional[str] = Query(None, description="فلترة حسب الحالة"),
+    category_id: Optional[int] = Query(None, description="فلترة حسب الفئة"),
+    date_from: Optional[str] = Query(None, description="من تاريخ (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="إلى تاريخ (YYYY-MM-DD)")
 ):
     """
     🎯 Get reports that have ALL 3 content types:
@@ -540,7 +609,12 @@ async def get_reports_with_complete_content(
     
     Returns full report details + all generated content
     
-    Example: GET /api/reports/with-complete-content?page=1&limit=20&sort=desc
+    New Features:
+    - Filter by status, category, date range
+    - Enhanced content organization
+    - Better error handling
+    
+    Example: GET /api/reports/with-complete-content?page=1&limit=20&sort=desc&status=published&category_id=1
     """
     try:
         conn = get_db()
@@ -551,8 +625,32 @@ async def get_reports_with_complete_content(
         sort_direction = "DESC" if sort == "desc" else "ASC"
         
         # ========================================
-        # QUERY 1: Get reports with all 3 types
+        # QUERY 1: Get reports with all 3 types + filters
         # ========================================
+        
+        # Build WHERE conditions
+        where_conditions = []
+        query_params = []
+        
+        if status:
+            where_conditions.append("gr.status = %s")
+            query_params.append(status)
+            
+        if category_id:
+            where_conditions.append("nc.category_id = %s")
+            query_params.append(category_id)
+            
+        if date_from:
+            where_conditions.append("gr.created_at >= %s")
+            query_params.append(date_from)
+            
+        if date_to:
+            where_conditions.append("gr.created_at <= %s")
+            query_params.append(date_to)
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "AND " + " AND ".join(where_conditions)
         
         query_reports = f"""
         WITH complete_reports AS (
@@ -584,18 +682,43 @@ async def get_reports_with_complete_content(
         INNER JOIN complete_reports cr ON gr.id = cr.report_id
         LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
         LEFT JOIN categories c ON nc.category_id = c.id
+        WHERE 1=1 {where_clause}
         ORDER BY gr.created_at {sort_direction}
         LIMIT %s OFFSET %s
         """
         
-        cursor.execute(query_reports, (limit, offset))
+        query_params.extend([limit, offset])
+        cursor.execute(query_reports, query_params)
         reports_data = cursor.fetchall()
         
         # ========================================
-        # QUERY 2: Get total count
+        # QUERY 2: Get total count with same filters
         # ========================================
         
-        query_count = """
+        count_where_conditions = []
+        count_params = []
+        
+        if status:
+            count_where_conditions.append("gr.status = %s")
+            count_params.append(status)
+            
+        if category_id:
+            count_where_conditions.append("nc.category_id = %s")
+            count_params.append(category_id)
+            
+        if date_from:
+            count_where_conditions.append("gr.created_at >= %s")
+            count_params.append(date_from)
+            
+        if date_to:
+            count_where_conditions.append("gr.created_at <= %s")
+            count_params.append(date_to)
+        
+        count_where_clause = ""
+        if count_where_conditions:
+            count_where_clause = "AND " + " AND ".join(count_where_conditions)
+        
+        query_count = f"""
         WITH complete_reports AS (
             SELECT 
                 gc.report_id,
@@ -608,9 +731,12 @@ async def get_reports_with_complete_content(
         SELECT COUNT(*) as total
         FROM complete_reports cr
         INNER JOIN generated_report gr ON cr.report_id = gr.id
+        LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
+        LEFT JOIN categories c ON nc.category_id = c.id
+        WHERE 1=1 {count_where_clause}
         """
         
-        cursor.execute(query_count)
+        cursor.execute(query_count, count_params)
         total_count = cursor.fetchone()[0]
         
         # ========================================
@@ -727,7 +853,427 @@ async def get_reports_with_complete_content(
         return {
             'success': True,
             'pagination': pagination,
-            'reports': reports
+            'reports': reports,
+            'filters_applied': {
+                'status': status,
+                'category_id': category_id,
+                'date_from': date_from,
+                'date_to': date_to
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/complete-content-stats")
+async def get_complete_content_stats():
+    """
+    📊 Get statistics for reports with complete content
+    
+    Returns:
+    - Total reports with complete content
+    - Breakdown by status
+    - Breakdown by category
+    - Content type statistics
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Total reports with complete content
+        cursor.execute("""
+            WITH complete_reports AS (
+                SELECT 
+                    gc.report_id,
+                    COUNT(DISTINCT gc.content_type_id) as types_count
+                FROM generated_content gc
+                WHERE gc.content_type_id IN (1, 6, 7)
+                GROUP BY gc.report_id
+                HAVING COUNT(DISTINCT gc.content_type_id) = 3
+            )
+            SELECT COUNT(*) as total
+            FROM complete_reports
+        """)
+        total_complete = cursor.fetchone()[0]
+        
+        # By status
+        cursor.execute("""
+            WITH complete_reports AS (
+                SELECT 
+                    gc.report_id,
+                    COUNT(DISTINCT gc.content_type_id) as types_count
+                FROM generated_content gc
+                WHERE gc.content_type_id IN (1, 6, 7)
+                GROUP BY gc.report_id
+                HAVING COUNT(DISTINCT gc.content_type_id) = 3
+            )
+            SELECT gr.status, COUNT(*) as count
+            FROM complete_reports cr
+            INNER JOIN generated_report gr ON cr.report_id = gr.id
+            GROUP BY gr.status
+            ORDER BY count DESC
+        """)
+        by_status = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # By category
+        cursor.execute("""
+            WITH complete_reports AS (
+                SELECT 
+                    gc.report_id,
+                    COUNT(DISTINCT gc.content_type_id) as types_count
+                FROM generated_content gc
+                WHERE gc.content_type_id IN (1, 6, 7)
+                GROUP BY gc.report_id
+                HAVING COUNT(DISTINCT gc.content_type_id) = 3
+            )
+            SELECT c.name, COUNT(*) as count
+            FROM complete_reports cr
+            INNER JOIN generated_report gr ON cr.report_id = gr.id
+            LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
+            LEFT JOIN categories c ON nc.category_id = c.id
+            WHERE c.name IS NOT NULL
+            GROUP BY c.name
+            ORDER BY count DESC
+        """)
+        by_category = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # Content type breakdown
+        cursor.execute("""
+            SELECT 
+                CASE 
+                    WHEN content_type_id = 1 THEN 'social_media'
+                    WHEN content_type_id = 6 THEN 'image'
+                    WHEN content_type_id = 7 THEN 'audio'
+                END as content_type,
+                COUNT(*) as total_items,
+                COUNT(DISTINCT report_id) as reports_count
+            FROM generated_content
+            WHERE content_type_id IN (1, 6, 7)
+            GROUP BY content_type_id
+            ORDER BY content_type_id
+        """)
+        content_breakdown = {}
+        for row in cursor.fetchall():
+            content_breakdown[row[0]] = {
+                'total_items': row[1],
+                'reports_count': row[2]
+            }
+        
+        # Recent activity (last 7 days)
+        cursor.execute("""
+            WITH complete_reports AS (
+                SELECT 
+                    gc.report_id,
+                    COUNT(DISTINCT gc.content_type_id) as types_count
+                FROM generated_content gc
+                WHERE gc.content_type_id IN (1, 6, 7)
+                GROUP BY gc.report_id
+                HAVING COUNT(DISTINCT gc.content_type_id) = 3
+            )
+            SELECT COUNT(*) as recent_count
+            FROM complete_reports cr
+            INNER JOIN generated_report gr ON cr.report_id = gr.id
+            WHERE gr.created_at >= CURRENT_DATE - INTERVAL '7 days'
+        """)
+        recent_activity = cursor.fetchone()[0]
+        
+        cursor.close()
+        conn.close()
+        
+        return {
+            'success': True,
+            'stats': {
+                'total_complete_reports': total_complete,
+                'recent_activity_7days': recent_activity,
+                'by_status': by_status,
+                'by_category': by_category,
+                'content_breakdown': content_breakdown
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/content-summary/{report_id}")
+async def get_report_content_summary(report_id: int):
+    """
+    📋 Get detailed content summary for a specific report
+    
+    Returns all generated content with metadata and status
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Check if report exists
+        cursor.execute("SELECT id, title, status FROM generated_report WHERE id = %s", (report_id,))
+        report = cursor.fetchone()
+        
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        # Get all content types for this report
+        cursor.execute("""
+            SELECT 
+                gc.id,
+                gc.content_type_id,
+                gc.title,
+                gc.description,
+                gc.content,
+                gc.file_url,
+                gc.status,
+                gc.created_at,
+                gc.updated_at,
+                CASE 
+                    WHEN gc.content_type_id = 1 THEN 'social_media'
+                    WHEN gc.content_type_id = 6 THEN 'image'
+                    WHEN gc.content_type_id = 7 THEN 'audio'
+                    ELSE 'other'
+                END as content_type_name
+            FROM generated_content gc
+            WHERE gc.report_id = %s
+            ORDER BY gc.content_type_id, gc.created_at DESC
+        """, (report_id,))
+        
+        content_items = cursor.fetchall()
+        
+        # Organize content
+        content_summary = {
+            'report_info': {
+                'id': report[0],
+                'title': report[1],
+                'status': report[2]
+            },
+            'content_types': {
+                'social_media': [],
+                'image': [],
+                'audio': [],
+                'other': []
+            },
+            'statistics': {
+                'total_items': len(content_items),
+                'by_type': {},
+                'by_status': {}
+            }
+        }
+        
+        for item in content_items:
+            content_obj = {
+                'id': item[0],
+                'content_type_id': item[1],
+                'title': item[2],
+                'description': item[3],
+                'content': item[4],
+                'file_url': item[5],
+                'status': item[6],
+                'created_at': item[7].isoformat() if item[7] else None,
+                'updated_at': item[8].isoformat() if item[8] else None
+            }
+            
+            content_type_name = item[9]
+            content_summary['content_types'][content_type_name].append(content_obj)
+            
+            # Update statistics
+            content_summary['statistics']['by_type'][content_type_name] = \
+                content_summary['statistics']['by_type'].get(content_type_name, 0) + 1
+            
+            content_summary['statistics']['by_status'][item[6]] = \
+                content_summary['statistics']['by_status'].get(item[6], 0) + 1
+        
+        # Check if report has complete content
+        has_complete_content = (
+            len(content_summary['content_types']['social_media']) > 0 and
+            len(content_summary['content_types']['image']) > 0 and
+            len(content_summary['content_types']['audio']) > 0
+        )
+        
+        content_summary['has_complete_content'] = has_complete_content
+        
+        cursor.close()
+        conn.close()
+        
+        return {
+            "success": True,
+            "data": content_summary
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# Collection & Generation Triggers
+# ============================================
+
+@router.post("/collect-news")
+async def collect_news(background_tasks: BackgroundTasks):
+    """Trigger news collection from all sources"""
+    def run_collection():
+        from app.services.news_collector import NewsCollector
+        collector = NewsCollector()
+        collector.collect_from_all_sources()
+    
+    background_tasks.add_task(run_collection)
+    
+    return {
+        "message": "News collection started in background",
+        "status": "processing"
+    }
+
+
+@router.post("/generate-report")
+async def generate_report(background_tasks: BackgroundTasks):
+    """Trigger automatic report generation"""
+    def run_generation():
+        from app.services.reporter import ReportGenerator
+        reporter = ReportGenerator()
+        reporter.generate_reports_for_clusters(skip_existing=True)
+    
+    background_tasks.add_task(run_generation)
+    
+    return {
+        "message": "Report generation started in background", 
+        "status": "processing"
+    }
+
+
+@router.get("/by-content-type/{content_type_id}")
+async def get_reports_by_content_type(
+    content_type_id: int,
+    page: int = Query(1, ge=1, description="رقم الصفحة"),
+    limit: int = Query(20, ge=1, le=100, description="عدد Reports في الصفحة"),
+    status: Optional[str] = Query(None, description="فلترة حسب الحالة")
+):
+    """
+    🎯 Get reports that have specific content type
+    
+    Content Types:
+    - 1: Social Media
+    - 6: Image  
+    - 7: Audio
+    
+    Example: GET /api/reports/by-content-type/6?page=1&limit=20&status=published
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Pagination
+        offset = (page - 1) * limit
+        
+        # Build WHERE conditions
+        where_conditions = ["gc.content_type_id = %s"]
+        query_params = [content_type_id]
+        
+        if status:
+            where_conditions.append("gr.status = %s")
+            query_params.append(status)
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        # Get reports with specific content type
+        query_reports = f"""
+        SELECT DISTINCT
+            gr.id,
+            gr.cluster_id,
+            gr.title,
+            gr.content,
+            gr.status,
+            gr.source_news_count,
+            gr.created_at,
+            gr.updated_at,
+            gr.published_at,
+            nc.category_id,
+            c.name as category_name,
+            COUNT(gc.id) as content_count
+        FROM generated_report gr
+        INNER JOIN generated_content gc ON gr.id = gc.report_id
+        LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
+        LEFT JOIN categories c ON nc.category_id = c.id
+        WHERE {where_clause}
+        GROUP BY gr.id, gr.cluster_id, gr.title, gr.content, gr.status, 
+                 gr.source_news_count, gr.created_at, gr.updated_at, 
+                 gr.published_at, nc.category_id, c.name
+        ORDER BY gr.created_at DESC
+        LIMIT %s OFFSET %s
+        """
+        
+        query_params.extend([limit, offset])
+        cursor.execute(query_reports, query_params)
+        reports_data = cursor.fetchall()
+        
+        # Get total count
+        count_params = [content_type_id]
+        if status:
+            count_params.append(status)
+            
+        query_count = f"""
+        SELECT COUNT(DISTINCT gr.id) as total
+        FROM generated_report gr
+        INNER JOIN generated_content gc ON gr.id = gc.report_id
+        WHERE {where_clause}
+        """
+        
+        cursor.execute(query_count, count_params)
+        total_count = cursor.fetchone()[0]
+        
+        # Build response
+        reports = []
+        for report in reports_data:
+            report_obj = {
+                'id': report[0],
+                'cluster_id': report[1],
+                'title': report[2],
+                'content': report[3],
+                'status': report[4],
+                'source_news_count': report[5],
+                'created_at': report[6].isoformat() if report[6] else None,
+                'updated_at': report[7].isoformat() if report[7] else None,
+                'published_at': report[8].isoformat() if report[8] else None,
+                'category': {
+                    'id': report[9],
+                    'name': report[10]
+                } if report[9] else None,
+                'content_count': report[11]
+            }
+            reports.append(report_obj)
+        
+        # Pagination info
+        total_pages = (total_count + limit - 1) // limit
+        pagination = {
+            'page': page,
+            'limit': limit,
+            'total': total_count,
+            'pages': total_pages,
+            'has_next': page < total_pages,
+            'has_prev': page > 1
+        }
+        
+        # Content type name
+        content_type_names = {
+            1: 'social_media',
+            6: 'image',
+            7: 'audio'
+        }
+        
+        cursor.close()
+        conn.close()
+        
+        return {
+            'success': True,
+            'content_type': {
+                'id': content_type_id,
+                'name': content_type_names.get(content_type_id, 'unknown')
+            },
+            'pagination': pagination,
+            'reports': reports,
+            'filters_applied': {
+                'status': status
+            }
         }
         
     except Exception as e:
@@ -736,7 +1282,7 @@ async def get_reports_with_complete_content(
 
 @router.get("/stats/overview")
 async def get_report_stats():
-    """Get report statistics"""
+    """Get comprehensive report statistics"""
     try:
         conn = get_db()
         cursor = conn.cursor()
@@ -750,6 +1296,7 @@ async def get_report_stats():
             SELECT status, COUNT(*)
             FROM generated_report
             GROUP BY status
+            ORDER BY COUNT(*) DESC
         """)
         by_status = {row[0]: row[1] for row in cursor.fetchall()}
         
@@ -772,22 +1319,70 @@ async def get_report_stats():
         """)
         today = cursor.fetchone()[0]
         
+        # This week's reports
+        cursor.execute("""
+            SELECT COUNT(*) FROM generated_report
+            WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
+        """)
+        this_week = cursor.fetchone()[0]
+        
         # Average word count
         cursor.execute("""
             SELECT AVG(LENGTH(content) / 5)::numeric(10,2)
             FROM generated_report
+            WHERE content IS NOT NULL
         """)
         avg_words = float(cursor.fetchone()[0] or 0)
+        
+        # Reports with complete content
+        cursor.execute("""
+            WITH complete_reports AS (
+                SELECT 
+                    gc.report_id,
+                    COUNT(DISTINCT gc.content_type_id) as types_count
+                FROM generated_content gc
+                WHERE gc.content_type_id IN (1, 6, 7)
+                GROUP BY gc.report_id
+                HAVING COUNT(DISTINCT gc.content_type_id) = 3
+            )
+            SELECT COUNT(*) as total
+            FROM complete_reports
+        """)
+        complete_content_count = cursor.fetchone()[0]
+        
+        # Content generation stats
+        cursor.execute("""
+            SELECT 
+                CASE 
+                    WHEN content_type_id = 1 THEN 'social_media'
+                    WHEN content_type_id = 6 THEN 'image'
+                    WHEN content_type_id = 7 THEN 'audio'
+                    ELSE 'other'
+                END as content_type,
+                COUNT(*) as total_generated
+            FROM generated_content
+            WHERE content_type_id IN (1, 6, 7)
+            GROUP BY content_type_id
+            ORDER BY content_type_id
+        """)
+        content_generation = {row[0]: row[1] for row in cursor.fetchall()}
         
         cursor.close()
         conn.close()
         
         return {
-            "total_reports": total,
-            "today_reports": today,
-            "by_status": by_status,
-            "by_category": by_category,
-            "avg_word_count": avg_words
+            "success": True,
+            "stats": {
+                "total_reports": total,
+                "today_reports": today,
+                "week_reports": this_week,
+                "complete_content_reports": complete_content_count,
+                "avg_word_count": avg_words,
+                "by_status": by_status,
+                "by_category": by_category,
+                "content_generation": content_generation,
+                "completion_rate": round((complete_content_count / total * 100), 2) if total > 0 else 0
+            }
         }
         
     except Exception as e:

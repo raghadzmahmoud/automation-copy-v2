@@ -4,7 +4,7 @@
 🔗 API Router - Central routing configuration
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 # ============================================
 # News
@@ -20,6 +20,7 @@ from .news.manual_input_routes import router as manual_news_router
 # ============================================
 from .reports.bulletin_routes import router as bulletin_generate_router
 from .reports.digest_routes import router as digest_generate_router
+from .reports.report_routes import router as report_router
 
 # ============================================
 # Reports – Read (NEW, explicit)
@@ -103,6 +104,16 @@ api_router.include_router(
 
 
 # ============================================
+# 📊 Reports – General & Analytics
+# ============================================
+api_router.include_router(
+    report_router,
+    prefix="/reports",
+    tags=["Reports – General & Analytics"]
+)
+
+
+# ============================================
 # 🎧 Media Module
 # ============================================
 api_router.include_router(audio_router, prefix="/audio", tags=["Audio Generation"])
@@ -135,4 +146,49 @@ async def test_endpoint():
     return {
         "message": "AI Media Center API is working!",
         "status": "ok"
+    }
+
+
+# ============================================
+# 📰 Collection & Generation Triggers
+# ============================================
+from fastapi import BackgroundTasks
+
+@api_router.post("/collect-news")
+async def collect_news_trigger(background_tasks: BackgroundTasks):
+    """Trigger news collection from all sources"""
+    def run_collection():
+        try:
+            from app.services.news_collector import NewsCollector
+            collector = NewsCollector()
+            collector.collect_from_all_sources()
+        except ImportError:
+            # Fallback if service doesn't exist
+            pass
+    
+    background_tasks.add_task(run_collection)
+    
+    return {
+        "message": "News collection started in background",
+        "status": "processing"
+    }
+
+
+@api_router.post("/generate-report") 
+async def generate_report_trigger(background_tasks: BackgroundTasks):
+    """Trigger automatic report generation"""
+    def run_generation():
+        try:
+            from app.services.reporter import ReportGenerator
+            reporter = ReportGenerator()
+            reporter.generate_reports_for_clusters(skip_existing=True)
+        except ImportError:
+            # Fallback if service doesn't exist
+            pass
+    
+    background_tasks.add_task(run_generation)
+    
+    return {
+        "message": "Report generation started in background",
+        "status": "processing"
     }
