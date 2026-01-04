@@ -42,3 +42,5 @@ moviepy
 ffmpeg-python
 
 python-multipart
+
+beautifulsoup4
