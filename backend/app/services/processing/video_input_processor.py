@@ -9,7 +9,7 @@ import os
 import tempfile
 from typing import Dict, Optional
 from fastapi import UploadFile
-from moviepy import VideoFileClip
+from moviepy.editor import VideoFileClip
 from io import BytesIO
 from app.services.processing.audio_input_processor import AudioInputProcessor
 

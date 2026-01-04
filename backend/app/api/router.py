@@ -68,6 +68,12 @@ api_router.include_router(source_router, prefix="/sources", tags=["Sources"])
 
 
 # ============================================
+# 📰 Reports – General Reports
+# ============================================
+api_router.include_router(report_router, prefix="/reports", tags=["Reports – General"])
+
+
+# ============================================
 # 📻 Reports – Bulletins
 # ============================================
 
