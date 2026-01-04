@@ -177,3 +177,7 @@ Examples:
     
     generate_reels(report_id=args.report_id, force_update=args.force)
 
+
+"""
+python3 app/jobs/reel_generation_job.py --report-id 5010 
+"""

@@ -132,6 +132,30 @@ class ReelGenerator:
             print(f"⚠️  Google TTS initialization failed: {e}")
             self.tts_client = None
     
+    def _get_news_images_for_report(self, report_id: int) -> List[str]:
+        """Get all image URLs from news articles in the report's cluster"""
+        try:
+            self.cursor.execute("""
+                SELECT DISTINCT rn.content_img
+                FROM generated_report gr
+                JOIN news_cluster_members ncm ON ncm.cluster_id = gr.cluster_id
+                JOIN raw_news rn ON rn.id = ncm.news_id
+                WHERE gr.id = %s
+                AND rn.content_img IS NOT NULL
+                AND rn.content_img != ''
+                ORDER BY rn.content_img
+                LIMIT 10
+            """, (report_id,))
+            
+            results = self.cursor.fetchall()
+            image_urls = [row[0] for row in results if row[0]]
+            
+            return image_urls
+            
+        except Exception as e:
+            print(f"   ❌ Error fetching news images: {e}")
+            return []
+    
     def generate_for_report(
         self,
         report_id: int,
@@ -153,15 +177,24 @@ class ReelGenerator:
                 s3_path=existing_reel['file_url']
             )
         
-        # Fetch image and audio for this report
-        image_content = self._get_content_by_type(report_id, self.image_content_type_id)
-        audio_content = self._get_content_by_type(report_id, self.audio_content_type_id, include_content=True)
+        # Fetch images from news articles in the cluster
+        news_images = self._get_news_images_for_report(report_id)
         
-        if not image_content:
+        # Fallback to generated image if no news images found
+        if not news_images:
+            print(f"⚠️  No images found in news articles, trying generated image...")
+            image_content = self._get_content_by_type(report_id, self.image_content_type_id)
+            if image_content:
+                news_images = [image_content['file_url']]
+        
+        if not news_images:
             return ReelGenerationResult(
                 success=False,
-                error_message="Image not found for this report"
+                error_message="No images found for this report"
             )
+        
+        # Fetch audio for this report
+        audio_content = self._get_content_by_type(report_id, self.audio_content_type_id, include_content=True)
         
         if not audio_content:
             return ReelGenerationResult(
@@ -169,19 +202,34 @@ class ReelGenerator:
                 error_message="Audio not found for this report"
             )
         
-        print(f"📸 Image found: {image_content['file_url'][:60]}...")
+        print(f"📸 Found {len(news_images)} images from news articles")
         print(f"🎵 Audio found: {audio_content['file_url'][:60]}...")
         
-        # Download image and audio from S3
-        image_path = None
+        # Download images and audio
+        image_paths = []
         audio_path = None
         temp_audio_path = None  # For temporary summarized audio
         
         try:
-            image_path = self._download_from_s3_url(image_content['file_url'])
+            # Download all images
+            for i, img_url in enumerate(news_images, 1):
+                try:
+                    img_path = self._download_from_url(img_url)
+                    if img_path:
+                        image_paths.append(img_path)
+                        print(f"   ✅ Downloaded image {i}/{len(news_images)}")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to download image {i}: {e}")
+            
+            if not image_paths:
+                return ReelGenerationResult(
+                    success=False,
+                    error_message="Failed to download any images"
+                )
+            
             audio_path = self._download_from_s3_url(audio_content['file_url'])
             
-            print(f"✅ Downloaded image and audio files")
+            print(f"✅ Downloaded {len(image_paths)} images and audio file")
             
             # Check audio duration and summarize if needed
             from moviepy.editor import AudioFileClip as CheckAudioClip
@@ -237,9 +285,9 @@ class ReelGenerator:
                     if summarized_text:
                         text_content = summarized_text
             
-            # Generate the reel
+            # Generate the reel with multiple images
             generation_result = self._create_reel(
-                image_path=image_path,
+                image_paths=image_paths,
                 audio_path=audio_path,
                 report_id=report_id,
                 text_content=text_content
@@ -285,8 +333,9 @@ class ReelGenerator:
         
         finally:
             # Cleanup temporary files
-            if image_path and os.path.exists(image_path):
-                os.remove(image_path)
+            for img_path in image_paths:
+                if img_path and os.path.exists(img_path):
+                    os.remove(img_path)
             if audio_path and os.path.exists(audio_path):
                 os.remove(audio_path)
             # temp_audio_path is the same as audio_path if it was created, so already cleaned up
@@ -358,13 +407,13 @@ class ReelGenerator:
     
     def _create_reel(
         self,
-        image_path: str,
+        image_paths: List[str],
         audio_path: str,
         report_id: int,
         text_content: Optional[str] = None,
         retries: int = 2
     ) -> ReelGenerationResult:
-        """Create a vertical video reel from image and audio"""
+        """Create a vertical video reel from multiple images and audio"""
         
         for attempt in range(retries):
             try:
@@ -384,50 +433,69 @@ class ReelGenerator:
                     audio_clip = audio_clip.subclip(0, self.MAX_DURATION)
                 
                 print(f"   📊 Audio duration: {audio_duration:.2f}s")
+                print(f"   🖼️  Creating slideshow from {len(image_paths)} images")
                 
-                # Load and prepare image
-                image = Image.open(image_path)
-                original_width, original_height = image.size
+                # Process and create clips from all images
+                temp_image_paths = []
+                image_clips = []
                 
-                # Resize image to fit reel dimensions (9:16 aspect ratio)
-                # Maintain aspect ratio and center crop
-                target_aspect = self.REEL_WIDTH / self.REEL_HEIGHT
-                image_aspect = original_width / original_height
+                # Calculate duration per image
+                duration_per_image = audio_duration / len(image_paths)
                 
-                if image_aspect > target_aspect:
-                    # Image is wider, crop width
-                    new_width = int(original_height * target_aspect)
-                    left = (original_width - new_width) // 2
-                    image = image.crop((left, 0, left + new_width, original_height))
-                else:
-                    # Image is taller, crop height
-                    new_height = int(original_width / target_aspect)
-                    top = (original_height - new_height) // 2
-                    image = image.crop((0, top, original_width, top + new_height))
+                for idx, image_path in enumerate(image_paths):
+                    # Load and prepare image
+                    image = Image.open(image_path)
+                    original_width, original_height = image.size
+                    
+                    # Resize image to fit reel dimensions (9:16 aspect ratio)
+                    # Maintain aspect ratio and center crop
+                    target_aspect = self.REEL_WIDTH / self.REEL_HEIGHT
+                    image_aspect = original_width / original_height
+                    
+                    if image_aspect > target_aspect:
+                        # Image is wider, crop width
+                        new_width = int(original_height * target_aspect)
+                        left = (original_width - new_width) // 2
+                        image = image.crop((left, 0, left + new_width, original_height))
+                    else:
+                        # Image is taller, crop height
+                        new_height = int(original_width / target_aspect)
+                        top = (original_height - new_height) // 2
+                        image = image.crop((0, top, original_width, top + new_height))
+                    
+                    # Resize to exact reel dimensions
+                    image = image.resize((self.REEL_WIDTH, self.REEL_HEIGHT), Image.Resampling.LANCZOS)
+                    
+                    # Save processed image to temp file
+                    temp_image_path = tempfile.mktemp(suffix=f'_img{idx}.png')
+                    image.save(temp_image_path, 'PNG')
+                    temp_image_paths.append(temp_image_path)
+                    
+                    # Create video clip from image
+                    img_clip = ImageClip(temp_image_path, duration=duration_per_image)
+                    img_clip = img_clip.set_fps(self.REEL_FPS)
+                    img_clip = img_clip.resize((self.REEL_WIDTH, self.REEL_HEIGHT))
+                    
+                    # Set start time for this image clip
+                    img_clip = img_clip.set_start(idx * duration_per_image)
+                    
+                    image_clips.append(img_clip)
                 
-                # Resize to exact reel dimensions
-                image = image.resize((self.REEL_WIDTH, self.REEL_HEIGHT), Image.Resampling.LANCZOS)
-                
-                # Save processed image to temp file
-                temp_image_path = tempfile.mktemp(suffix='.png')
-                image.save(temp_image_path, 'PNG')
-                
-                # Create video clip from image
-                image_clip = ImageClip(temp_image_path, duration=audio_duration)
-                image_clip = image_clip.set_fps(self.REEL_FPS)
-                image_clip = image_clip.resize((self.REEL_WIDTH, self.REEL_HEIGHT))
+                # Combine all image clips into a slideshow
+                from moviepy.editor import concatenate_videoclips
+                combined_image_clip = concatenate_videoclips(image_clips, method="compose")
                 
                 # Add text overlays if text content is provided
                 if text_content:
                     print(f"   📝 Adding text overlays to video...")
-                    text_clips = self._create_text_overlays(text_content, audio_duration)
+                    text_clips = self._create_text_overlays(text_content, audio_duration, audio_path)
                     if text_clips:
-                        # Composite image with text overlays
-                        video_clip = CompositeVideoClip([image_clip] + text_clips)
+                        # Composite slideshow with text overlays
+                        video_clip = CompositeVideoClip([combined_image_clip] + text_clips)
                     else:
-                        video_clip = image_clip
+                        video_clip = combined_image_clip
                 else:
-                    video_clip = image_clip
+                    video_clip = combined_image_clip
                 
                 # Combine video with audio
                 video_clip = video_clip.set_audio(audio_clip)
@@ -453,10 +521,13 @@ class ReelGenerator:
                 print(f"   ✅ Video rendered ({len(video_bytes):,} bytes, {audio_duration:.2f}s)")
                 
                 # Cleanup temp files
-                image_clip.close()
+                for clip in image_clips:
+                    clip.close()
                 audio_clip.close()
                 video_clip.close()
-                os.remove(temp_image_path)
+                for temp_path in temp_image_paths:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
                 os.remove(temp_video_path)
                 
                 # Upload to S3
@@ -488,12 +559,15 @@ class ReelGenerator:
                 
                 # Cleanup on error
                 try:
-                    if 'temp_image_path' in locals() and os.path.exists(temp_image_path):
-                        os.remove(temp_image_path)
+                    if 'temp_image_paths' in locals():
+                        for temp_path in temp_image_paths:
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
                     if 'temp_video_path' in locals() and os.path.exists(temp_video_path):
                         os.remove(temp_video_path)
-                    if 'image_clip' in locals():
-                        image_clip.close()
+                    if 'image_clips' in locals():
+                        for clip in image_clips:
+                            clip.close()
                     if 'audio_clip' in locals():
                         audio_clip.close()
                     if 'video_clip' in locals():
@@ -515,6 +589,24 @@ class ReelGenerator:
             success=False,
             error_message="Max retries exceeded"
         )
+    
+    def _download_from_url(self, url: str) -> str:
+        """Download file from any URL to temporary file"""
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            
+            suffix = os.path.splitext(url)[1] or '.tmp'
+            temp_file = tempfile.mktemp(suffix=suffix)
+            
+            with open(temp_file, 'wb') as f:
+                f.write(response.content)
+            
+            return temp_file
+            
+        except Exception as e:
+            print(f"   ⚠️  Failed to download from {url[:60]}...: {e}")
+            return None
     
     def _download_from_s3_url(self, s3_url: str) -> str:
         """Download file from S3 URL to temporary file"""
@@ -853,10 +945,59 @@ class ReelGenerator:
             print(f"   ❌ Error summarizing text: {e}")
             return None
     
-    def _create_text_overlays(self, text: str, audio_duration: float) -> List:
-        """Create synchronized text overlays for the video using PIL (no ImageMagick dependency)"""
+    def _get_word_timestamps_from_audio(self, audio_path: str) -> Optional[List[Dict]]:
+        """Get word-level timestamps from audio using Google Cloud Speech-to-Text"""
+        try:
+            from google.cloud import speech
+            
+            # Initialize Speech client
+            speech_client = speech.SpeechClient()
+            
+            # Read audio file
+            with open(audio_path, 'rb') as audio_file:
+                audio_content = audio_file.read()
+            
+            audio = speech.RecognitionAudio(content=audio_content)
+            
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.MP3,
+                language_code="ar-XA",  # Arabic
+                enable_word_time_offsets=True,
+                model="default"
+            )
+            
+            print(f"   🎙️ Transcribing audio to get word timestamps...")
+            response = speech_client.recognize(config=config, audio=audio)
+            
+            word_info = []
+            for result in response.results:
+                for word in result.alternatives[0].words:
+                    word_info.append({
+                        'word': word.word,
+                        'start_time': word.start_time.total_seconds(),
+                        'end_time': word.end_time.total_seconds()
+                    })
+            
+            if word_info:
+                print(f"   ✅ Got timestamps for {len(word_info)} words")
+                return word_info
+            else:
+                print(f"   ⚠️  No word timestamps found in audio")
+                return None
+                
+        except Exception as e:
+            print(f"   ⚠️  Failed to get word timestamps: {e}")
+            return None
+    
+    def _create_text_overlays(self, text: str, audio_duration: float, audio_path: str = None) -> List:
+        """Create synchronized text overlays for the video using word-level timing"""
         try:
             import re
+            
+            # Try to get word-level timestamps from audio
+            word_timestamps = None
+            if audio_path:
+                word_timestamps = self._get_word_timestamps_from_audio(audio_path)
             
             # Split text into sentences (Arabic sentences end with . or ؟ or !)
             sentences = re.split(r'[.!؟]\s+', text)
@@ -865,32 +1006,92 @@ class ReelGenerator:
             if not sentences:
                 return []
             
-            # Calculate duration per sentence
-            duration_per_sentence = audio_duration / len(sentences)
-            
             # Position: center of reel (vertically centered)
-            # The text image is 400px tall, so we need to position it so it's centered
-            # Position will be adjusted in _create_text_clip_pil to account for image height
-            text_y_position = (self.REEL_HEIGHT - 400) // 2  # Center the 400px tall text image
+            text_y_position = (self.REEL_HEIGHT - 400) // 2
             
             text_clips = []
-            current_time = 0
             
-            for i, sentence in enumerate(sentences):
-                # Create text clip using PIL directly (no TextClip/ImageMagick dependency)
-                txt_clip = self._create_text_clip_pil(
-                    sentence,
-                    duration_per_sentence,
-                    current_time,
-                    ('center', text_y_position)
-                )
-                if txt_clip:
-                    text_clips.append(txt_clip)
-                    current_time += duration_per_sentence
-                else:
-                    print(f"   ⚠️  Failed to create text clip for sentence {i+1}")
+            if word_timestamps:
+                # Use word-level timestamps for accurate synchronization
+                print(f"   📊 Using word-level timestamps for {len(sentences)} sentences")
+                
+                # Match sentences to word timestamps
+                text_words = text.split()
+                sentence_timings = []
+                word_index = 0
+                
+                for sentence in sentences:
+                    sentence_words = sentence.split()
+                    sentence_word_count = len(sentence_words)
+                    
+                    if word_index < len(word_timestamps):
+                        start_time = word_timestamps[word_index]['start_time']
+                        
+                        # Find end time (last word of sentence)
+                        end_index = min(word_index + sentence_word_count - 1, len(word_timestamps) - 1)
+                        end_time = word_timestamps[end_index]['end_time']
+                        
+                        sentence_timings.append({
+                            'text': sentence,
+                            'start_time': start_time,
+                            'duration': end_time - start_time
+                        })
+                        
+                        word_index += sentence_word_count
+                    else:
+                        # Fallback: estimate timing for remaining sentences
+                        remaining_duration = audio_duration - word_timestamps[-1]['end_time']
+                        remaining_sentences = len(sentences) - len(sentence_timings)
+                        duration = remaining_duration / max(remaining_sentences, 1)
+                        
+                        start_time = sentence_timings[-1]['start_time'] + sentence_timings[-1]['duration'] if sentence_timings else 0
+                        sentence_timings.append({
+                            'text': sentence,
+                            'start_time': start_time,
+                            'duration': duration
+                        })
+                
+                # Create text clips with accurate timing
+                for i, timing in enumerate(sentence_timings):
+                    txt_clip = self._create_text_clip_pil(
+                        timing['text'],
+                        timing['duration'],
+                        timing['start_time'],
+                        ('center', text_y_position)
+                    )
+                    if txt_clip:
+                        text_clips.append(txt_clip)
+                    else:
+                        print(f"   ⚠️  Failed to create text clip for sentence {i+1}")
+            else:
+                # Fallback: use character-based estimation (better than equal distribution)
+                print(f"   📊 Using character-based timing estimation for {len(sentences)} sentences")
+                
+                # Estimate timing based on sentence length (more accurate than equal split)
+                total_chars = sum(len(s) for s in sentences)
+                current_time = 0
+                
+                for i, sentence in enumerate(sentences):
+                    # Duration proportional to sentence length
+                    char_ratio = len(sentence) / total_chars
+                    duration = audio_duration * char_ratio
+                    
+                    # Minimum duration of 1 second per sentence
+                    duration = max(duration, 1.0)
+                    
+                    txt_clip = self._create_text_clip_pil(
+                        sentence,
+                        duration,
+                        current_time,
+                        ('center', text_y_position)
+                    )
+                    if txt_clip:
+                        text_clips.append(txt_clip)
+                        current_time += duration
+                    else:
+                        print(f"   ⚠️  Failed to create text clip for sentence {i+1}")
             
-            print(f"   ✅ Created {len(text_clips)} text overlays")
+            print(f"   ✅ Created {len(text_clips)} text overlays with synchronized timing")
             return text_clips
             
         except Exception as e:
@@ -970,24 +1171,35 @@ class ReelGenerator:
                     font = None
                     print(f"   ❌ No font available - text may not render")
             
-            # Wrap text to fit width FIRST (before Arabic processing)
-            # This preserves word boundaries for better wrapping
-            max_chars = 30
-            lines = textwrap.wrap(text, width=max_chars)
-            
-            # Process each line for proper Arabic RTL and connected letters
-            # Handle Arabic RTL text properly with proper shaping and connection
+            # Process Arabic text FIRST, then wrap manually
+            # This is critical for RTL languages like Arabic
             try:
                 import arabic_reshaper
                 from bidi.algorithm import get_display
                 
-                # Create a reshaper instance with proper configuration for Arabic
+                # Create a reshaper instance for Arabic text
                 # This ensures letters are connected properly (cursive/joined form)
-                reshaper = arabic_reshaper.ArabicReshaper(
-                    arabic_reshaper.config_for_true_type_fonts
-                )
+                reshaper = arabic_reshaper.ArabicReshaper()
                 
-                # Process each line individually to maintain proper connection
+                # Split text into words first (preserving Arabic word boundaries)
+                words = text.split()
+                
+                # Manually wrap text by grouping words into lines
+                max_words_per_line = 5  # Adjust based on typical Arabic word length
+                lines = []
+                current_line = []
+                
+                for word in words:
+                    current_line.append(word)
+                    if len(current_line) >= max_words_per_line:
+                        lines.append(' '.join(current_line))
+                        current_line = []
+                
+                # Add remaining words
+                if current_line:
+                    lines.append(' '.join(current_line))
+                
+                # Now apply Arabic reshaping and RTL to each line
                 processed_lines = []
                 for line in lines:
                     # Reshape Arabic text (connects letters properly in their joined forms)
@@ -1002,12 +1214,16 @@ class ReelGenerator:
             except ImportError:
                 print(f"   ⚠️  arabic-reshaper not available - Arabic text may not render correctly")
                 print(f"   ⚠️  Install: pip install arabic-reshaper python-bidi")
-                # Without these libraries, Arabic text will be disconnected and may appear reversed
+                # Fallback: use textwrap for English text
+                max_chars = 30
+                lines = textwrap.wrap(text, width=max_chars)
             except Exception as e:
                 print(f"   ⚠️  Error processing Arabic text: {e}")
                 import traceback
                 traceback.print_exc()
-                # Continue with original lines if processing fails
+                # Fallback: use textwrap for English text
+                max_chars = 30
+                lines = textwrap.wrap(text, width=max_chars)
             
             # Limit to 4 lines max
             if len(lines) > 4:
