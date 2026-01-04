@@ -3,8 +3,11 @@
 """
 ⏰ Database-Driven Background Task Scheduler with Job Chaining
 كل job لما يخلص يشغّل اللي بعده
-"""
 
++ 📻 النشرة والموجز (كل 15 و 10 دقائق)
+"""
+import certifi, os
+os.environ["SSL_CERT_FILE"] = certifi.where()
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import psycopg2
@@ -258,6 +261,15 @@ def register_default_tasks():
         from app.jobs.audio_generation_job import generate_audio
         generate_audio()
     
+    # ➕ NEW: النشرة والموجز
+    def bulletin_task():
+        from app.jobs.bulletin_digest_job import generate_bulletin_job
+        generate_bulletin_job()
+    
+    def digest_task():
+        from app.jobs.bulletin_digest_job import generate_digest_job
+        generate_digest_job()
+    
     # Register all tasks
     register_task('scraping', scraping_task)
     register_task('clustering', clustering_task)
@@ -265,6 +277,10 @@ def register_default_tasks():
     register_task('social_media_generation', social_media_generation_task)
     register_task('image_generation', image_generation_task)
     register_task('audio_generation', audio_generation_task)
+    
+    # ➕ NEW: تسجيل النشرة والموجز
+    register_task('bulletin_generation', bulletin_task)
+    register_task('digest_generation', digest_task)
 
 
 # ============================================
@@ -313,6 +329,30 @@ def start_scheduler(run_initial: bool = True):
             replace_existing=True
         )
         
+        # ════════════════════════════════════════════════════════════
+        # ➕ NEW: جدولة النشرة والموجز
+        # ════════════════════════════════════════════════════════════
+        
+        # 📻 النشرة: كل 15 دقيقة
+        scheduler.add_job(
+            lambda: execute_job('bulletin_generation'),
+            trigger=CronTrigger(minute='*/15'),
+            id='bulletin_trigger',
+            name='📻 Bulletin Generator (Every 15 min)',
+            replace_existing=True
+        )
+        
+        # 📰 الموجز: كل 10 دقائق
+        scheduler.add_job(
+            lambda: execute_job('digest_generation'),
+            trigger=CronTrigger(minute='*/10'),
+            id='digest_trigger',
+            name='📰 Digest Generator (Every 10 min)',
+            replace_existing=True
+        )
+        
+        # ════════════════════════════════════════════════════════════
+        
         # Start scheduler
         scheduler.start()
         
@@ -320,13 +360,21 @@ def start_scheduler(run_initial: bool = True):
         logger.info("⏰ Scheduler started with Job Chaining")
         logger.info("=" * 60)
         logger.info("🔗 Pipeline: Scraping → Clustering → Reports → Generation")
-        logger.info(f"⏱️ Schedule: {scraping_task['schedule_pattern'] if scraping_task else '*/10 * * * *'}")
+        logger.info(f"⏱️ Pipeline Schedule: {scraping_task['schedule_pattern'] if scraping_task else '*/10 * * * *'}")
+        logger.info("📻 Bulletin: Every 15 minutes (صباحية/مسائية)")
+        logger.info("📰 Digest: Every 10 minutes")
         logger.info("=" * 60)
         
         # Run initial pipeline if requested
         if run_initial:
             logger.info("🚀 Running initial pipeline...")
             run_pipeline()
+            
+            # ➕ توليد أولي للنشرة والموجز
+            logger.info("📻 Running initial bulletin...")
+            execute_job('bulletin_generation')
+            logger.info("📰 Running initial digest...")
+            execute_job('digest_generation')
             
     except Exception as e:
         logger.error(f"❌ Failed to start scheduler: {e}")
@@ -361,6 +409,8 @@ def get_scheduler_status() -> Dict:
     return {
         "status": "running",
         "pipeline": "Scraping → Clustering → Reports → (Social + Images + Audio)",
+        "bulletin": "Every 15 minutes",
+        "digest": "Every 10 minutes",
         "jobs": jobs_info
     }
 
@@ -389,6 +439,19 @@ def run_only_scraping():
     """Run only scraping (without chaining)"""
     logger.info("🔧 Running only scraping...")
     return execute_job('scraping')
+
+
+# ➕ NEW: Manual triggers للنشرة والموجز
+def run_bulletin_now():
+    """Manually trigger bulletin generation"""
+    logger.info("🔧 Manually triggering bulletin...")
+    return execute_job('bulletin_generation')
+
+
+def run_digest_now():
+    """Manually trigger digest generation"""
+    logger.info("🔧 Manually triggering digest...")
+    return execute_job('digest_generation')
 
 
 # ============================================
