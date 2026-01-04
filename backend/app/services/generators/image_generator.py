@@ -339,33 +339,45 @@ class ImageGenerator:
         return stats
     
     def _create_image_prompt(self, report: Dict) -> str:
-        """إنشاء prompt لتوليد الصورة"""
-        title = report['title']
-        content = report['content']
-        
-        keywords = self._extract_keywords(title, content)
-        keywords_str = "، ".join(keywords[:5])
-        
-        prompt = f"""Create a professional, realistic news image that represents this news story:
+        """Create a neutral, generic news illustration image prompt"""
 
-Title: {title}
+        keywords = self._extract_keywords(report['title'], report['content'])
+        context = ", ".join(keywords[:3])
 
-Topic: {keywords_str}
+        prompt = f"""
+    Create a neutral, realistic, high-quality news illustration image.
 
-Requirements:
-- Realistic, high-quality image
-- Professional journalism style
-- Suitable for news broadcast
-- No text or watermarks
-- No specific identifiable faces
-- Balanced and attractive composition
-- Professional lighting
-- High resolution suitable for publishing
+    Context (for understanding only, do NOT visualize text or symbols):
+    {context}
 
-Size: Horizontal (16:9)
-Style: Realistic photojournalism
-"""
+    Image Requirements:
+    - Generic and neutral visual representation
+    - No text, captions, signs, or written elements
+    - No political symbols, flags, or logos
+    - No identifiable people or faces
+    - No dramatic or emotional emphasis
+    - No exaggeration or sensationalism
+
+    Visual Style:
+    - Realistic photojournalism
+    - Professional news broadcast aesthetic
+    - Calm, balanced composition
+    - Natural lighting
+    - Clean background or relevant environment
+    - Documentary-style realism
+
+    Framing:
+    - Wide horizontal shot (16:9)
+    - Suitable as a background image for news content
+    - Contextual but non-specific
+
+    Important:
+    - The image must NOT depict specific events, locations, or individuals
+    - The image should feel illustrative, general, and unbiased
+    """
+
         return prompt
+
     
     def _create_simple_prompt(self, report: Dict) -> str:
         """✅ Prompt أبسط للـ fallback"""
