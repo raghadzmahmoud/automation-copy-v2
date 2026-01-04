@@ -155,7 +155,7 @@ class ReelGenerator:
         
         # Fetch image and audio for this report
         image_content = self._get_content_by_type(report_id, self.image_content_type_id)
-        audio_content = self._get_content_by_type(report_id, self.audio_content_type_id)
+        audio_content = self._get_content_by_type(report_id, self.audio_content_type_id, include_content=True)
         
         if not image_content:
             return ReelGenerationResult(
@@ -221,11 +221,28 @@ class ReelGenerator:
                         else:
                             print(f"   ⚠️  Failed to generate temporary audio, using trimmed original")
             
+            # Get text content for subtitles
+            text_content = None
+            if audio_content and audio_content.get('content'):
+                text_content = audio_content['content']
+            elif temp_audio_path:
+                # If we used summarized text, get it from the report
+                report = self._fetch_report_content(report_id)
+                if report:
+                    summarized_text = self._summarize_text(
+                        title=report.get('title', ''),
+                        content=report.get('content', ''),
+                        target_duration=self.MAX_DURATION
+                    )
+                    if summarized_text:
+                        text_content = summarized_text
+            
             # Generate the reel
             generation_result = self._create_reel(
                 image_path=image_path,
                 audio_path=audio_path,
-                report_id=report_id
+                report_id=report_id,
+                text_content=text_content
             )
             
             if not generation_result.success:
@@ -344,6 +361,7 @@ class ReelGenerator:
         image_path: str,
         audio_path: str,
         report_id: int,
+        text_content: Optional[str] = None,
         retries: int = 2
     ) -> ReelGenerationResult:
         """Create a vertical video reel from image and audio"""
@@ -399,8 +417,20 @@ class ReelGenerator:
                 image_clip = image_clip.set_fps(self.REEL_FPS)
                 image_clip = image_clip.resize((self.REEL_WIDTH, self.REEL_HEIGHT))
                 
-                # Combine image and audio
-                video_clip = image_clip.set_audio(audio_clip)
+                # Add text overlays if text content is provided
+                if text_content:
+                    print(f"   📝 Adding text overlays to video...")
+                    text_clips = self._create_text_overlays(text_content, audio_duration)
+                    if text_clips:
+                        # Composite image with text overlays
+                        video_clip = CompositeVideoClip([image_clip] + text_clips)
+                    else:
+                        video_clip = image_clip
+                else:
+                    video_clip = image_clip
+                
+                # Combine video with audio
+                video_clip = video_clip.set_audio(audio_clip)
                 
                 # Export video to temp file
                 temp_video_path = tempfile.mktemp(suffix='.mp4')
@@ -541,28 +571,45 @@ class ReelGenerator:
             except Exception as e2:
                 raise Exception(f"Failed to download from S3: {e}, HTTP fallback also failed: {e2}")
     
-    def _get_content_by_type(self, report_id: int, content_type_id: int) -> Optional[Dict]:
+    def _get_content_by_type(self, report_id: int, content_type_id: int, include_content: bool = False) -> Optional[Dict]:
         """Get content by report_id and content_type_id"""
         try:
-            self.cursor.execute("""
-                SELECT id, file_url, title, description
-                FROM generated_content
-                WHERE report_id = %s
-                    AND content_type_id = %s
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (report_id, content_type_id))
+            if include_content:
+                query = """
+                    SELECT id, file_url, title, description, content
+                    FROM generated_content
+                    WHERE report_id = %s
+                        AND content_type_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """
+            else:
+                query = """
+                    SELECT id, file_url, title, description
+                    FROM generated_content
+                    WHERE report_id = %s
+                        AND content_type_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """
+            
+            self.cursor.execute(query, (report_id, content_type_id))
             
             row = self.cursor.fetchone()
             if not row:
                 return None
             
-            return {
+            result = {
                 'id': row[0],
                 'file_url': row[1],
                 'title': row[2],
                 'description': row[3]
             }
+            
+            if include_content and len(row) > 4:
+                result['content'] = row[4]
+            
+            return result
         except Exception as e:
             print(f"   ❌ Error fetching content: {e}")
             return None
@@ -804,6 +851,274 @@ class ReelGenerator:
                 
         except Exception as e:
             print(f"   ❌ Error summarizing text: {e}")
+            return None
+    
+    def _create_text_overlays(self, text: str, audio_duration: float) -> List:
+        """Create synchronized text overlays for the video using PIL (no ImageMagick dependency)"""
+        try:
+            import re
+            
+            # Split text into sentences (Arabic sentences end with . or ؟ or !)
+            sentences = re.split(r'[.!؟]\s+', text)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            
+            if not sentences:
+                return []
+            
+            # Calculate duration per sentence
+            duration_per_sentence = audio_duration / len(sentences)
+            
+            # Position: center of reel (vertically centered)
+            # The text image is 400px tall, so we need to position it so it's centered
+            # Position will be adjusted in _create_text_clip_pil to account for image height
+            text_y_position = (self.REEL_HEIGHT - 400) // 2  # Center the 400px tall text image
+            
+            text_clips = []
+            current_time = 0
+            
+            for i, sentence in enumerate(sentences):
+                # Create text clip using PIL directly (no TextClip/ImageMagick dependency)
+                txt_clip = self._create_text_clip_pil(
+                    sentence,
+                    duration_per_sentence,
+                    current_time,
+                    ('center', text_y_position)
+                )
+                if txt_clip:
+                    text_clips.append(txt_clip)
+                    current_time += duration_per_sentence
+                else:
+                    print(f"   ⚠️  Failed to create text clip for sentence {i+1}")
+            
+            print(f"   ✅ Created {len(text_clips)} text overlays")
+            return text_clips
+            
+        except Exception as e:
+            print(f"   ⚠️  Error creating text overlays: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def _create_text_clip_pil(self, text: str, duration: float, start_time: float, position: tuple) -> Optional:
+        """Create text clip using PIL with proper Arabic RTL support"""
+        try:
+            from moviepy.editor import ImageClip
+            from PIL import Image, ImageDraw, ImageFont
+            import textwrap
+            
+            # Create a transparent image for text with semi-transparent background
+            img = Image.new('RGBA', (self.REEL_WIDTH, 400), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            
+            # Load bundled Arabic font (works on all platforms)
+            font = None
+            font_size = 60
+            
+            # First, try to use the bundled font from the project
+            try:
+                # Get the backend directory (4 levels up from this file)
+                current_file = os.path.abspath(__file__)
+                backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
+                bundled_font_path = os.path.join(backend_dir, 'fonts', 'NotoSansArabic-Regular.ttf')
+                
+                if os.path.exists(bundled_font_path):
+                    try:
+                        font = ImageFont.truetype(bundled_font_path, font_size)
+                        print(f"   ✅ Using bundled Arabic font: {bundled_font_path}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to load bundled font: {e}")
+            except Exception as e:
+                print(f"   ⚠️  Error finding bundled font: {e}")
+            
+            # Fallback: Try system fonts if bundled font not available
+            if not font:
+                try:
+                    import platform
+                    system = platform.system()
+                    
+                    if system == 'Linux':
+                        font_paths = [
+                            '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf',
+                            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+                        ]
+                    elif system == 'Darwin':  # macOS
+                        font_paths = [
+                            '/System/Library/Fonts/Supplemental/Arial.ttf',
+                            '/Library/Fonts/Arial.ttf',
+                        ]
+                    else:  # Windows
+                        font_paths = []
+                    
+                    for font_path in font_paths:
+                        if os.path.exists(font_path):
+                            try:
+                                font = ImageFont.truetype(font_path, font_size)
+                                print(f"   ✅ Using system font: {font_path}")
+                                break
+                            except:
+                                continue
+                except:
+                    pass
+            
+            # Last resort: use default font (may not support Arabic)
+            if not font:
+                try:
+                    font = ImageFont.load_default()
+                    print(f"   ⚠️  Using default font (Arabic may not render correctly)")
+                except:
+                    font = None
+                    print(f"   ❌ No font available - text may not render")
+            
+            # Wrap text to fit width FIRST (before Arabic processing)
+            # This preserves word boundaries for better wrapping
+            max_chars = 30
+            lines = textwrap.wrap(text, width=max_chars)
+            
+            # Process each line for proper Arabic RTL and connected letters
+            # Handle Arabic RTL text properly with proper shaping and connection
+            try:
+                import arabic_reshaper
+                from bidi.algorithm import get_display
+                
+                # Create a reshaper instance with proper configuration for Arabic
+                # This ensures letters are connected properly (cursive/joined form)
+                reshaper = arabic_reshaper.ArabicReshaper(
+                    arabic_reshaper.config_for_true_type_fonts
+                )
+                
+                # Process each line individually to maintain proper connection
+                processed_lines = []
+                for line in lines:
+                    # Reshape Arabic text (connects letters properly in their joined forms)
+                    reshaped_line = reshaper.reshape(line)
+                    # Apply bidirectional algorithm for RTL display
+                    rtl_line = get_display(reshaped_line)
+                    processed_lines.append(rtl_line)
+                
+                lines = processed_lines
+                print(f"   ✅ Processed {len(lines)} lines with arabic-reshaper (RTL + connected letters)")
+                
+            except ImportError:
+                print(f"   ⚠️  arabic-reshaper not available - Arabic text may not render correctly")
+                print(f"   ⚠️  Install: pip install arabic-reshaper python-bidi")
+                # Without these libraries, Arabic text will be disconnected and may appear reversed
+            except Exception as e:
+                print(f"   ⚠️  Error processing Arabic text: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continue with original lines if processing fails
+            
+            # Limit to 4 lines max
+            if len(lines) > 4:
+                lines = lines[:4]
+            
+            # Calculate text position (centered vertically in the image)
+            line_height = 80
+            total_height = len(lines) * line_height
+            y_start = (400 - total_height) // 2
+            
+            # Draw semi-transparent background rectangle for better readability
+            bg_padding = 30
+            bg_y = y_start - bg_padding
+            bg_height = total_height + (bg_padding * 2)
+            draw.rectangle(
+                [(50, bg_y), (self.REEL_WIDTH - 50, bg_y + bg_height)],
+                fill=(0, 0, 0, 200)  # Semi-transparent black background
+            )
+            
+            # Draw text with outline (stroke) for better visibility
+            for i, line in enumerate(lines):
+                y_pos = y_start + (i * line_height)
+                
+                # Get text dimensions for proper centering
+                if font:
+                    try:
+                        # Try new method first (PIL 8.0+)
+                        bbox = draw.textbbox((0, 0), line, font=font)
+                        text_width = bbox[2] - bbox[0]
+                        text_height = bbox[3] - bbox[1]
+                    except:
+                        try:
+                            # Fallback for older PIL versions
+                            bbox = draw.textsize(line, font=font)
+                            text_width = bbox[0]
+                            text_height = bbox[1]
+                        except:
+                            # Ultimate fallback
+                            text_width = len(line) * (font_size // 2)
+                            text_height = font_size
+                else:
+                    text_width = len(line) * 20
+                    text_height = 30
+                
+                # Center horizontally
+                x_pos = (self.REEL_WIDTH - text_width) // 2
+                
+                # Draw stroke (outline) - draw text multiple times with offset
+                for adj_x in range(-3, 4):
+                    for adj_y in range(-3, 4):
+                        if adj_x != 0 or adj_y != 0:
+                            try:
+                                if font:
+                                    draw.text(
+                                        (x_pos + adj_x, y_pos + adj_y),
+                                        line,
+                                        font=font,
+                                        fill=(0, 0, 0, 255),  # Black outline
+                                    )
+                                else:
+                                    draw.text(
+                                        (x_pos + adj_x, y_pos + adj_y),
+                                        line,
+                                        fill=(0, 0, 0, 255),  # Black outline
+                                    )
+                            except Exception as e:
+                                pass
+                
+                # Draw main text
+                try:
+                    if font:
+                        draw.text(
+                            (x_pos, y_pos),
+                            line,
+                            font=font,
+                            fill=(255, 255, 255, 255),  # White text
+                        )
+                    else:
+                        # Fallback without font
+                        draw.text(
+                            (x_pos, y_pos),
+                            line,
+                            fill=(255, 255, 255, 255),  # White text
+                        )
+                except Exception as e:
+                    print(f"   ❌ Error drawing text line {i+1}: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Save to temp file
+            temp_text_img = tempfile.mktemp(suffix='.png')
+            img.save(temp_text_img)
+            
+            # Verify the image was created and has content
+            if os.path.exists(temp_text_img):
+                file_size = os.path.getsize(temp_text_img)
+                print(f"   📄 Text image saved: {temp_text_img} ({file_size:,} bytes)")
+            else:
+                print(f"   ❌ Text image file was not created!")
+                return None
+            
+            # Create ImageClip from the text image
+            text_clip = ImageClip(temp_text_img, duration=duration)
+            text_clip = text_clip.set_position(position).set_start(start_time)
+            
+            return text_clip
+            
+        except Exception as e:
+            print(f"   ⚠️  Error in PIL text clip creation: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _generate_temporary_audio(self, text: str, report_id: int) -> Optional[str]:
