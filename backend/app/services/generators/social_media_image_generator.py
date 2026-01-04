@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 🎨 Social Media Image Generator
-يولد 3 صور سوشال ميديا ويحفظهم في content_type_id = 9 كـ JSON
+يولد صورتين سوشال ميديا ويحفظهم في content_type_id = 9 كـ JSON
 
 Structure in DB:
 - content_type_id: 9 (Facebook Template)
-- content: {"h-GAZA": "url", "n-NEWS": "url", "n-SPORT": "url"}
+- content: {"h-GAZA": "url", "DOT": "url"}
 """
 
 import os
@@ -28,10 +28,9 @@ class SocialImageGenerator:
     """
     مولّد صور السوشال ميديا
     
-    يولد 3 صور:
+    يولد صورتين:
     - h-GAZA (هنا غزة)
-    - n-NEWS (إن نيوز)  
-    - n-SPORT (إن سبورت)
+    - DOT (دوت)
     
     ويحفظهم كـ JSON في content_type_id = 9
     """
@@ -39,14 +38,15 @@ class SocialImageGenerator:
     # Content Type ID
     FACEBOOK_TEMPLATE_ID = 9
     
-    # Templates (ordered)
-    TEMPLATES = ['h-GAZA', 'n-NEWS', 'n-SPORT']
+    # Templates (ordered) - فقط DOT و h-GAZA
+    TEMPLATES = ['h-GAZA', 'DOT']  # عطلنا n-NEWS و n-SPORT
     
     # Logos
     LOGOS = {
         'h-GAZA': 'https://media-automation-bucket.s3.us-east-1.amazonaws.com/generated/assets/profile+picture.png',
-        'n-NEWS': 'https://media-automation-bucket.s3.us-east-1.amazonaws.com/generated/assets/News.png',
-        'n-SPORT': 'https://media-automation-bucket.s3.us-east-1.amazonaws.com/generated/assets/Sport.png'
+        # 'n-NEWS': 'https://media-automation-bucket.s3.us-east-1.amazonaws.com/generated/assets/News.png',  # معطل
+        # 'n-SPORT': 'https://media-automation-bucket.s3.us-east-1.amazonaws.com/generated/assets/Sport.png',  # معطل
+        'DOT': 'https://media-automation-bucket.s3.us-east-1.amazonaws.com/generated/assets/Screenshot+2026-01-04+112600.png'
     }
     
     def __init__(self):
@@ -64,8 +64,16 @@ class SocialImageGenerator:
         self.s3_folder = 'generated/social-images/'
         print("✅ S3 initialized")
         
+        # Image settings
         self.output_size = (1200, 630)
-        self.logo_size = (250, 250)
+        
+        # Logo sizes - uniform for consistency
+        self.logo_sizes = {
+            'h-GAZA': (180, 180),
+            # 'n-NEWS': (180, 180),   # معطل
+            # 'n-SPORT': (180, 180),  # معطل
+            'DOT': (180, 180)
+        }
         
         print("=" * 60 + "\n")
     
@@ -146,7 +154,7 @@ class SocialImageGenerator:
         
         for template in self.TEMPLATES:
             try:
-                logo = self._download_logo(self.LOGOS[template])
+                logo = self._download_logo(self.LOGOS[template], template)  # Pass template name
                 final = self._create_image(background.copy(), logo, title)
                 upload = self._upload_to_s3(final, report_id, template)
                 
@@ -235,7 +243,7 @@ class SocialImageGenerator:
         Save as JSON in content field
         
         Example:
-        content = '{"h-GAZA": "url1", "n-NEWS": "url2", "n-SPORT": "url3"}'
+        content = '{"h-GAZA": "url1", "DOT": "url2"}'
         """
         try:
             content_json = json.dumps(images, ensure_ascii=False)
@@ -247,10 +255,8 @@ class SocialImageGenerator:
             
             existing = self.cursor.fetchone()
             
-            if existing and not force_update:
-                return 'skipped'
-            
             if existing:
+                # Always update if exists (removed force_update check)
                 self.cursor.execute("""
                     UPDATE generated_content
                     SET content = %s, status = 'completed', updated_at = NOW()
@@ -259,6 +265,7 @@ class SocialImageGenerator:
                 self.conn.commit()
                 return 'updated'
             else:
+                # Insert new
                 self.cursor.execute("""
                     INSERT INTO generated_content (
                         report_id, content_type_id, content, status, created_at, updated_at
@@ -277,8 +284,8 @@ class SocialImageGenerator:
         r.raise_for_status()
         return Image.open(BytesIO(r.content)).convert('RGB')
     
-    def _download_logo(self, url: str) -> Image.Image:
-        """Download logo"""
+    def _download_logo(self, url: str, template: str) -> Image.Image:
+        """Download logo with template-specific size"""
         r = requests.get(url, timeout=30)
         r.raise_for_status()
         logo = Image.open(BytesIO(r.content))
@@ -286,9 +293,11 @@ class SocialImageGenerator:
         if logo.mode != 'RGBA':
             logo = logo.convert('RGBA')
         
+        # Get size for this template
+        target_w, target_h = self.logo_sizes.get(template, (180, 180))
+        
         w, h = logo.size
-        tw, th = self.logo_size
-        scale = min(tw/w, th/h)
+        scale = min(target_w/w, target_h/h)
         
         return logo.resize((int(w*scale), int(h*scale)), Image.Resampling.LANCZOS)
     
@@ -319,16 +328,21 @@ class SocialImageGenerator:
         return img
     
     def _add_logo(self, img: Image.Image, logo: Image.Image) -> Image.Image:
-        """Add logo"""
+        """Add logo to top-left corner - tight to edge"""
+        # Smaller gap - في الزاوية مباشرة
+        x = 10  # كان 30 - صار 10
+        y = 10  # كان 30 - صار 10
+        
         if logo.mode == 'RGBA':
-            img.paste(logo, (30, 30), logo)
+            img.paste(logo, (x, y), logo)
         else:
-            img.paste(logo, (30, 30))
+            img.paste(logo, (x, y))
         return img
     
     def _add_title_with_box(self, img: Image.Image, title: str) -> Image.Image:
-        """Add title"""
-        font = self._get_font(58)
+        """Add title with better font"""
+        # خط أكبر وأوضح
+        font = self._get_font(64)  # كان 58 - صار 64
         words = title.split()
         temp = ImageDraw.Draw(Image.new('RGB', img.size))
         max_w = img.size[0] - 140
@@ -358,18 +372,19 @@ class SocialImageGenerator:
         
         lines = [get_display(arabic_reshaper.reshape(l)) for l in lines_raw]
         
-        lh = 75
+        # مسافات أفضل
+        lh = 80  # كان 75 - زدنا المسافة بين الأسطر
         max_lw = max([temp.textbbox((0,0), l, font=font)[2]-temp.textbbox((0,0), l, font=font)[0] for l in lines])
         
-        px, py = 60, 40
+        px, py = 70, 45  # padding أكبر شوي
         bw = max_lw + px*2
         bh = len(lines)*lh + py*2
         bx = (img.size[0]-bw)//2
-        by = img.size[1]-bh-50
+        by = img.size[1]-bh-60  # أبعد شوي عن الحافة السفلية
         
         overlay = Image.new('RGBA', img.size, (0,0,0,0))
         do = ImageDraw.Draw(overlay)
-        self._draw_rounded_rect(do, [bx,by,bx+bw,by+bh], 20, (0,0,0,200))
+        self._draw_rounded_rect(do, [bx,by,bx+bw,by+bh], 25, (0,0,0,210))  # opacity أقوى شوي
         img.paste(overlay, (0,0), overlay)
         
         draw = ImageDraw.Draw(img)
@@ -379,7 +394,8 @@ class SocialImageGenerator:
             bbox = draw.textbbox((0,0), line, font=font)
             lw = bbox[2]-bbox[0]
             x = (img.size[0]-lw)//2
-            draw.text((x+3,y+3), line, font=font, fill=(0,0,0,200))
+            # Shadow أوضح
+            draw.text((x+4,y+4), line, font=font, fill=(0,0,0,220))
             draw.text((x,y), line, font=font, fill='white')
             y += lh
         
@@ -443,10 +459,32 @@ if __name__ == "__main__":
     
     import sys
     if len(sys.argv) > 1:
+        # Single report with database save
         rid = int(sys.argv[1])
         result = gen.generate_all(rid)
-        print(f"\n✅ Result: {result}")
+        
+        if result['success']:
+            print(f"\n✅ Generated {len(result['images'])} images")
+            
+            # Save to database
+            saved = gen._save_to_generated_content(rid, result['images'], False)
+            
+            if saved == 'created':
+                print(f"✅ Saved to database (content_type_id = 9)")
+            elif saved == 'updated':
+                print(f"✅ Updated in database")
+            elif saved == 'skipped':
+                print(f"⚠️  Already exists in database")
+            else:
+                print(f"❌ Failed to save to database")
+            
+            print(f"\n📊 Images:")
+            for name, url in result['images'].items():
+                print(f"  {name}: {url}")
+        else:
+            print(f"\n❌ Failed: {result.get('error')}")
     else:
+        # Batch mode
         stats = gen.generate_for_all_reports(limit=3)
         print(f"\n📊 Stats: {stats}")
     

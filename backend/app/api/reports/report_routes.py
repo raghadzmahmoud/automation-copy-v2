@@ -560,7 +560,7 @@ async def get_reports_with_complete_content(
                 gc.report_id,
                 COUNT(DISTINCT gc.content_type_id) as types_count
             FROM generated_content gc
-            WHERE gc.content_type_id IN (1, 6, 7)
+            WHERE gc.content_type_id IN (1, 6, 7,9,8)
             GROUP BY gc.report_id
             HAVING COUNT(DISTINCT gc.content_type_id) = 3
         )
