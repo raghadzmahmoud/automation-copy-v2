@@ -30,18 +30,19 @@ logger = logging.getLogger(__name__)
 
 # ترتيب المهام في الـ Pipeline
 PIPELINE_ORDER = [
-    'scraping',           # 1. سحب الأخبار
-    'clustering',         # 2. تجميع الأخبار
-    'report_generation',  # 3. توليد التقارير
-    'image_generation',   # 4. توليد الصور
-    'audio_generation',   # 5. توليد الصوت
-    'bulletin_generation', # 6. النشرة
-    'digest_generation',  # 7. الموجز
-    'social_media_generation',  # 8. سوشيال ميديا (اختياري)
+    'scraping',              # 1. سحب الأخبار
+    'clustering',            # 2. تجميع الأخبار
+    'report_generation',     # 3. توليد التقارير
+    'image_generation',      # 4. توليد الصور
+    'audio_generation',      # 5. توليد الصوت
+    'bulletin_generation',   # 6. النشرة
+    'digest_generation',     # 7. الموجز
+    'social_media_generation', # 8. سوشيال ميديا
+    'reel_generation',       # 9. توليد الريلز ➕
 ]
 
 # الفترة بين كل دورة pipeline كاملة (بالثواني)
-PIPELINE_COOLDOWN = 60  # دقيقة واحدة بعد ما يخلص الكل
+PIPELINE_COOLDOWN = 600  # 10 دقائق بعد ما يخلص الكل
 
 # Task functions mapping
 TASK_FUNCTIONS: Dict[str, Callable] = {}
@@ -97,6 +98,11 @@ def register_all_tasks():
         from app.jobs.social_media_job import generate_social_media_content
         return generate_social_media_content()
     
+    # ➕ Reel Generation Task
+    def reel_generation_task():
+        from app.jobs.reel_generation_job import generate_reels
+        return generate_reels()
+    
     register_task('scraping', scraping_task)
     register_task('clustering', clustering_task)
     register_task('report_generation', report_generation_task)
@@ -105,6 +111,7 @@ def register_all_tasks():
     register_task('bulletin_generation', bulletin_task)
     register_task('digest_generation', digest_task)
     register_task('social_media_generation', social_media_task)
+    register_task('reel_generation', reel_generation_task)  # ➕
 
 
 # ============================================
@@ -383,9 +390,10 @@ def pipeline_loop():
             # Run one cycle
             run_pipeline_cycle(cycle_number)
             
-            # Cooldown before next cycle
+            # Cooldown before next cycle (10 minutes)
             if not stop_flag.is_set():
-                logger.info(f"😴 Cooling down for {PIPELINE_COOLDOWN}s before next cycle...")
+                cooldown_minutes = PIPELINE_COOLDOWN // 60
+                logger.info(f"😴 Cooling down for {cooldown_minutes} minutes before next cycle...")
                 
                 # Sleep in small chunks to allow quick stop
                 for _ in range(PIPELINE_COOLDOWN):
@@ -463,7 +471,8 @@ def get_pipeline_status() -> Dict:
         'running': pipeline_running,
         'tasks': list(TASK_FUNCTIONS.keys()),
         'order': PIPELINE_ORDER,
-        'cooldown': PIPELINE_COOLDOWN
+        'cooldown_seconds': PIPELINE_COOLDOWN,
+        'cooldown_minutes': PIPELINE_COOLDOWN // 60
     }
 
 
@@ -493,24 +502,26 @@ def run_single_cycle() -> Dict:
 if __name__ == "__main__":
     import signal
     import sys
-    import os
     
     # Setup logging for production
+    log_dir = 'app/logs'
+    os.makedirs(log_dir, exist_ok=True)
+    
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.StreamHandler(sys.stdout),  # Log to stdout for Render
-            logging.FileHandler('app/logs/worker.log', encoding='utf-8')
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(f'{log_dir}/worker.log', encoding='utf-8')
         ]
     )
     
     logger.info("=" * 70)
-    logger.info("🔄 Continuous Pipeline Scheduler (Production)")
+    logger.info("🔄 Continuous Pipeline Scheduler")
     logger.info("=" * 70)
     logger.info(f"🌍 Environment: {os.getenv('ENVIRONMENT', 'development')}")
     logger.info(f"📋 Pipeline order: {' → '.join(PIPELINE_ORDER)}")
-    logger.info(f"⏱️ Cooldown between cycles: {PIPELINE_COOLDOWN}s")
+    logger.info(f"⏱️ Cooldown between cycles: {PIPELINE_COOLDOWN // 60} minutes")
     logger.info("=" * 70)
     
     # Graceful shutdown handler

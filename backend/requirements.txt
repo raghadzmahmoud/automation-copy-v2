@@ -1,46 +1,64 @@
+# ===============================
 # FastAPI Core
+# ===============================
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
+python-multipart==0.0.6
 
+# ===============================
 # News Collection
+# ===============================
 feedparser==6.0.10
 requests==2.31.0
 urllib3==2.1.0
 
-# AI/ML
+# ===============================
+# AI / ML (Google)
+# ===============================
 google-genai
 google-generativeai
+google-cloud-texttospeech
+google-cloud-speech==2.24.1
 
-# Core Dependencies
+# ===============================
+# Core Utilities
+# ===============================
 python-dotenv==1.0.0
+python-dateutil==2.8.2
 
+# ===============================
 # Database
+# ===============================
 psycopg2-binary==2.9.9
 
+# ===============================
 # Scheduler
+# ===============================
 schedule==1.2.1
 apscheduler
 
-# Utilities
-python-dateutil==2.8.2
-
+# ===============================
 # AWS S3
+# ===============================
 boto3==1.34.0
 
+# ===============================
+# Media & Image Processing
+# ===============================
 Pillow
-
-google-cloud-texttospeech
-
-telethon
-playwright
-google-cloud-speech
-
-# Video Processing
-moviepy
+moviepy==1.0.3
 ffmpeg-python
 
-python-multipart
+# ===============================
+# Social Media & Automation
+# ===============================
+telethon
+playwright
 
-beautifulsoup4
+# ===============================
+# Arabic Text Support (RTL)
+# ===============================
+arabic-reshaper>=3.0.0
+python-bidi>=0.4.2
