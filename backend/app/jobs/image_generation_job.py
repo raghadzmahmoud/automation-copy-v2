@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-🎨 Image Generation Cron Job
-Runs every hour to generate images for new reports
-Usage: python cron/image_generation_job.py
+🎨 Image Generation Job (Enhanced - Condition-Based)
+
+✅ التحسينات:
+- فصل Image عن باقي الـ pipeline
+- تخطي التقارير الفاشلة كتير
+- الاستمرار حتى لو فشل تقرير
+- تسجيل أفضل للأخطاء
+
+Condition: يشتغل فقط إذا في تقارير بدون صور
 """
 import sys
 import os
@@ -13,12 +19,10 @@ from datetime import datetime
 import psycopg2
 from settings import DB_CONFIG
 
-# Ensure logs directory exists
+# Logging setup
 log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
+os.makedirs(log_dir, exist_ok=True)
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -30,83 +34,171 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def log_task_execution(status: str, items_count: int = 0, error_message: str = None):
-    """Log cron job execution"""
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+
+MAX_FAILURE_ATTEMPTS = 3  # تخطي التقارير اللي فشلت أكثر من هذا العدد
+REPORTS_PER_RUN = 10      # عدد التقارير لكل تشغيل (مخفف من 40)
+CHECK_HOURS = 48          # فحص التقارير من آخر X ساعة
+
+
+# =============================================================================
+# CONDITION CHECK
+# =============================================================================
+
+def has_reports_without_images(hours: int = CHECK_HOURS) -> tuple:
+    """
+    ✅ Condition: هل في تقارير جديدة بدون صور؟
+    مع استثناء التقارير الفاشلة كتير
+    """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
-        # Get task_id for image_generation
+        # ✅ Query محسن: يستثني التقارير اللي فشلت كتير
         cursor.execute("""
-            SELECT id FROM scheduled_tasks 
-            WHERE task_type = 'image_generation'
-        """)
-        
-        task_id = cursor.fetchone()
-        if not task_id:
-            logger.warning("Task 'image_generation' not found in scheduled_tasks")
-            return
-        
-        task_id = task_id[0]
-        
-        # Insert log
-        cursor.execute("""
-            INSERT INTO scheduled_task_logs (
-                scheduled_task_id, status, execution_time_seconds,
-                result, error_message, executed_at
+            SELECT COUNT(*) FROM generated_report gr
+            WHERE gr.created_at >= NOW() - INTERVAL '%s hours'
+            AND gr.status = 'draft'
+            AND NOT EXISTS (
+                SELECT 1 FROM generated_content gc
+                WHERE gc.report_id = gr.id
+                AND gc.content_type_id = 6
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (task_id, status, 0.0, str(items_count), error_message, datetime.now()))
+            AND NOT EXISTS (
+                SELECT 1 FROM image_generation_failures igf
+                WHERE igf.report_id = gr.id
+                AND igf.attempt_count >= %s
+            )
+        """, (hours, MAX_FAILURE_ATTEMPTS))
         
-        conn.commit()
+        count = cursor.fetchone()[0]
         cursor.close()
         conn.close()
         
+        return count > 0, count
+        
+    except psycopg2.errors.UndefinedTable:
+        # الجدول مش موجود، نرجع للـ query الأصلي
+        logger.warning("image_generation_failures table not found, using simple query")
+        return has_reports_without_images_simple(hours)
+        
     except Exception as e:
-        logger.error(f"Error logging task execution: {e}")
+        logger.error(f"Error checking reports without images: {e}")
+        return has_reports_without_images_simple(hours)
 
 
-def generate_images():
+def has_reports_without_images_simple(hours: int = CHECK_HOURS) -> tuple:
+    """Fallback query بدون فلتر الفشل"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM generated_report gr
+            WHERE gr.created_at >= NOW() - INTERVAL '%s hours'
+            AND gr.status = 'draft'
+            AND NOT EXISTS (
+                SELECT 1 FROM generated_content gc
+                WHERE gc.report_id = gr.id
+                AND gc.content_type_id = 6
+            )
+        """, (hours,))
+        
+        count = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        
+        return count > 0, count
+        
+    except Exception as e:
+        logger.error(f"Error in simple check: {e}")
+        return False, 0
+
+
+def get_failed_reports_count() -> int:
+    """✅ عدد التقارير المتخطاة بسبب كثرة الفشل"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM image_generation_failures
+            WHERE attempt_count >= %s
+        """, (MAX_FAILURE_ATTEMPTS,))
+        
+        count = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        return count
+        
+    except:
+        return 0
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def generate_images() -> dict:
     """Main image generation function"""
     start_time = datetime.now()
+    
     logger.info("=" * 60)
-    logger.info(f"Starting image generation at {start_time}")
+    logger.info(f"🎨 Image Generation Job started at {start_time}")
+    logger.info(f"⚙️  Config: {REPORTS_PER_RUN} reports/run, skip after {MAX_FAILURE_ATTEMPTS} failures")
+
+    # ✅ Condition Check
+    has_work, reports_count = has_reports_without_images(hours=CHECK_HOURS)
     
+    if not has_work:
+        skipped_count = get_failed_reports_count()
+        logger.info("⏭️ No reports without images found, skipping")
+        if skipped_count > 0:
+            logger.info(f"   ℹ️  {skipped_count} reports skipped due to repeated failures")
+        logger.info("=" * 60)
+        return {'skipped': True, 'reason': 'no_new_data', 'permanently_skipped': skipped_count}
+    
+    logger.info(f"📊 Found {reports_count} reports needing images")
+
     generator = None
-    
     try:
         from app.services.generators.image_generator import ImageGenerator
         
         generator = ImageGenerator()
         
-        logger.info(f"Processing limit: 40 reports per run")
+        logger.info(f"⚙️ Limit: {REPORTS_PER_RUN} images per run")
         
-        # توليد الصور (40 صور كل ساعة لتجنب rate limits)
+        # ✅ تشغيل التوليد
         stats = generator.generate_for_all_reports(
             force_update=False,
-            limit=40  # ← 40 صور فقط لتجنب quota issues
+            limit=REPORTS_PER_RUN
         )
         
-        # Log completion
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Image generation completed in {duration:.2f}s")
-        logger.info(f"Reports processed: {stats.get('total_reports', 0)}")
-        logger.info(f"Images created: {stats.get('success', 0)}")
-        logger.info(f"Images updated: {stats.get('updated', 0)}")
-        logger.info(f"Failed: {stats.get('failed', 0)}")
         
-        total_processed = stats.get('total_reports', 0)
+        logger.info(f"✅ Image generation completed in {duration:.2f}s")
+        logger.info(f"📊 Reports processed: {stats.get('total_reports', 0)}")
+        logger.info(f"📊 Images created: {stats.get('success', 0)}")
+        logger.info(f"📊 Skipped: {stats.get('skipped', 0)}")
+        logger.info(f"📊 Failed: {stats.get('failed', 0)}")
+        logger.info("=" * 60)
         
-        if total_processed == 0:
-            logger.info("No new reports need image generation")
-        
-        log_task_execution('completed', total_processed)
+        return {
+            'skipped': False,
+            'duration': duration,
+            'stats': stats
+        }
         
     except Exception as e:
-        logger.error(f"Fatal error in image generation: {e}")
+        logger.error(f"❌ Image generation failed: {e}")
         import traceback
         traceback.print_exc()
-        log_task_execution('failed', 0, str(e))
+        logger.info("=" * 60)
+        
+        # ✅ الـ Job يكمل حتى لو في error
+        return {'skipped': False, 'error': str(e), 'partial': True}
     
     finally:
         if generator:
@@ -114,8 +206,57 @@ def generate_images():
                 generator.close()
             except:
                 pass
-        logger.info("=" * 60)
+
+
+# =============================================================================
+# UTILITY: Reset failed reports
+# =============================================================================
+
+def reset_failed_reports(report_id: int = None):
+    """
+    ✅ إعادة تعيين التقارير الفاشلة للمحاولة من جديد
+    
+    Usage:
+        reset_failed_reports()        # كل التقارير
+        reset_failed_reports(123)     # تقرير محدد
+    """
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        if report_id:
+            cursor.execute("DELETE FROM image_generation_failures WHERE report_id = %s", (report_id,))
+            print(f"✅ Reset failure record for report #{report_id}")
+        else:
+            cursor.execute("DELETE FROM image_generation_failures")
+            print(f"✅ Reset all failure records")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        print(f"❌ Error resetting: {e}")
 
 
 if __name__ == "__main__":
-    generate_images()
+    # ✅ دعم reset من command line
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--reset":
+            if len(sys.argv) > 2 and sys.argv[2].isdigit():
+                reset_failed_reports(int(sys.argv[2]))
+            else:
+                reset_failed_reports()
+        elif sys.argv[1] == "--status":
+            has_work, count = has_reports_without_images()
+            skipped = get_failed_reports_count()
+            print(f"📊 Reports needing images: {count}")
+            print(f"⏭️  Permanently skipped: {skipped}")
+        else:
+            print("Usage:")
+            print("  python image_generation_job.py           # Run job")
+            print("  python image_generation_job.py --status  # Check status")
+            print("  python image_generation_job.py --reset   # Reset all failures")
+            print("  python image_generation_job.py --reset 123  # Reset specific report")
+    else:
+        generate_images()
