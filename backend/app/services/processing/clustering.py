@@ -163,28 +163,36 @@ class NewsClusterer:
         return final_stats
     
     def _fetch_unclustered_news(self, cutoff_date: datetime) -> List[Dict]:
-        """جلب الأخبار غير المجمعة"""
+        """جلب الأخبار غير المجمعة - استخدام collected_at بدل published_at"""
         query = """
             SELECT 
                 n.id, 
                 n.title, 
                 n.tags, 
                 n.category_id, 
-                n.published_at
+                n.published_at,
+                n.collected_at
             FROM raw_news n
             LEFT JOIN news_cluster_members nci ON n.id = nci.news_id
-            WHERE n.published_at >= %s
+            WHERE n.collected_at >= %s
             AND nci.news_id IS NULL
-            ORDER BY n.category_id, n.published_at DESC
+            ORDER BY n.category_id, n.collected_at DESC
         """
         
         self.cursor.execute(query, (cutoff_date,))
         rows = self.cursor.fetchall()
         
+        print(f"🔍 Query found {len(rows)} unclustered news (using collected_at)")
+        
         news_list = []
         for row in rows:
-            # تأكد من أن التاريخ timezone-aware
+            # استخدام collected_at للتجميع بدل published_at
+            collected_at = row[5]
             published_at = row[4]
+            
+            # تأكد من timezone
+            if collected_at and collected_at.tzinfo is None:
+                collected_at = collected_at.replace(tzinfo=timezone.utc)
             if published_at and published_at.tzinfo is None:
                 published_at = published_at.replace(tzinfo=timezone.utc)
             
@@ -193,7 +201,8 @@ class NewsClusterer:
                 'title': row[1],
                 'tags': self._parse_tags(row[2]),
                 'category_id': row[3],
-                'published_date': published_at
+                'published_date': collected_at,  # ← استخدام collected_at
+                'original_published_date': published_at
             })
         
         return news_list
@@ -355,9 +364,19 @@ class NewsClusterer:
     def _create_new_cluster(self, news_ids: List[int], tags: set, category_id: int, anchor_time: datetime) -> bool:
         """إنشاء cluster جديد"""
         try:
+            # ✅ تأكد من وجود أخبار
+            if not news_ids:
+                print(f"   ⚠️ No news IDs provided for cluster creation")
+                return False
+            
             now = datetime.now(timezone.utc)
             description = self._generate_cluster_description(list(tags), len(news_ids))
             tags_str = ", ".join(list(tags)[:10])
+            
+            # ✅ Debug: طباعة التفاصيل
+            print(f"   🔧 Creating cluster: {len(news_ids)} news, category: {category_id}")
+            print(f"   🔧 News IDs: {news_ids[:5]}...")  # أول 5 IDs
+            print(f"   🔧 Tags: {tags_str[:50]}...")
             
             self.cursor.execute("""
                 INSERT INTO news_clusters (description, tags, category_id, news_count, created_at, updated_at)
@@ -366,13 +385,34 @@ class NewsClusterer:
             """, (description, tags_str, category_id, len(news_ids), now, now))
             
             cluster_id = self.cursor.fetchone()[0]
+            print(f"   🔧 Created cluster ID: {cluster_id}")
             
-            # ربط الأخبار
+            # ربط الأخبار مع error handling
+            successful_inserts = 0
             for news_id in news_ids:
+                try:
+                    self.cursor.execute("""
+                        INSERT INTO news_cluster_members (cluster_id, news_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT DO NOTHING
+                    """, (cluster_id, news_id))
+                    
+                    if self.cursor.rowcount > 0:
+                        successful_inserts += 1
+                        
+                except Exception as insert_error:
+                    print(f"   ⚠️ Failed to insert news {news_id}: {insert_error}")
+            
+            print(f"   🔧 Successfully inserted {successful_inserts}/{len(news_ids)} news items")
+            
+            # ✅ تحديث news_count بالعدد الفعلي
+            if successful_inserts != len(news_ids):
                 self.cursor.execute("""
-                    INSERT INTO news_cluster_members (cluster_id, news_id)
-                    VALUES (%s, %s)
-                """, (cluster_id, news_id))
+                    UPDATE news_clusters 
+                    SET news_count = %s 
+                    WHERE id = %s
+                """, (successful_inserts, cluster_id))
+                print(f"   🔧 Updated cluster news_count to {successful_inserts}")
             
             self.conn.commit()
             
@@ -385,12 +425,14 @@ class NewsClusterer:
                 'updated_at': now
             }
             
-            print(f"   📚 Cluster {cluster_id}: {len(news_ids)} news")
-            return True
+            print(f"   ✅ Cluster {cluster_id}: {successful_inserts} news successfully added")
+            return successful_inserts > 0
             
         except Exception as e:
             self.conn.rollback()
             print(f"   ❌ Error creating cluster: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def _clean_old_clusters(self):
