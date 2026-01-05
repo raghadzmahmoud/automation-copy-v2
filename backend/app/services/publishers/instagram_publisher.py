@@ -52,10 +52,22 @@ class InstagramPublisher:
         
         import os
         
-        self.IG_USER_ID = ig_user_id or os.getenv('IG_USER_ID')
-        self.FB_ACCESS_TOKEN = fb_access_token or os.getenv('FB_ACCESS_TOKEN')
+        self.IG_USER_ID = ig_user_id or os.getenv('IG_GAZA_USER_ID')
+        self.FB_ACCESS_TOKEN = fb_access_token or os.getenv('FB_gaza_ACCESS_TOKEN')
         self.API_BASE_URL = (api_base_url or os.getenv('API_BASE_URL') or "http://localhost:8000").rstrip('/')
         self.GEMINI_API_KEY = gemini_api_key or os.getenv('GEMINI_API_KEY')
+        
+        # Validate credentials
+        if not self.IG_USER_ID:
+            print("❌ ERROR: IG_USER_ID not found!")
+            print("   Add IG_USER_ID to .env file")
+        else:
+            print(f"✅ IG_USER_ID: {self.IG_USER_ID}")
+        
+        if not self.FB_ACCESS_TOKEN:
+            print("❌ ERROR: FB_ACCESS_TOKEN not found!")
+        else:
+            print(f"✅ FB_ACCESS_TOKEN: {self.FB_ACCESS_TOKEN[:20]}...")
         
         # Instagram limits
         self.IG_CAPTION_MAX = 2200  # Instagram caption limit
@@ -72,8 +84,21 @@ class InstagramPublisher:
         
         # Database connection
         try:
-            from settings import DB_CONFIG
-            self.conn = psycopg2.connect(**DB_CONFIG)
+            # Try importing DB_CONFIG first
+            try:
+                from settings import DB_CONFIG
+                self.conn = psycopg2.connect(**DB_CONFIG)
+            except:
+                # Fallback: direct connection
+                db_config = {
+                    'host': os.getenv('DB_HOST', 'localhost'),
+                    'port': os.getenv('DB_PORT', 5432),
+                    'database': os.getenv('DB_NAME', 'postgres'),
+                    'user': os.getenv('DB_USER', 'postgres'),
+                    'password': os.getenv('DB_PASSWORD', '')
+                }
+                self.conn = psycopg2.connect(**db_config)
+            
             self.cursor = self.conn.cursor()
             print("✅ Database connected")
         except Exception as e:
@@ -295,58 +320,122 @@ class InstagramPublisher:
             return None
     
     def _get_reel_content(self, report_id: int) -> Optional[Dict]:
-        """جلب محتوى Reel من generated_content"""
+        """جلب محتوى Reel"""
+        
+        # Try Method 1: Direct query by report
+        print(f"   🔍 Method 1: Querying report {report_id} directly...")
+        reel = self._get_reel_from_report(report_id)
+        if reel:
+            return reel
+        
+        # Try Method 2: Query generated_content table directly
+        print(f"   🔍 Method 2: Querying generated_content...")
+        reel = self._get_reel_from_db(report_id)
+        if reel:
+            return reel
+        
+        print(f"   ❌ No reel found for report {report_id}")
+        return None
+    
+    def _get_reel_from_report(self, report_id: int) -> Optional[Dict]:
+        """جلب reel من report endpoint"""
         try:
-            # Get from generated_content where content_type_id = 8
-            url = f"{self.API_BASE_URL}/api/v1/generated-content"
-            params = {
-                'report_id': report_id,
-                'content_type_id': self.INSTAGRAM_REEL_CONTENT_ID
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
+            # Query single report
+            url = f"{self.API_BASE_URL}/api/v1/reports/{report_id}"
+            response = requests.get(url, timeout=10)
             
             if response.status_code != 200:
-                print(f"❌ API error: {response.status_code}")
                 return None
             
-            data = response.json()
+            report = response.json()
             
-            # Assuming API returns list or single object
-            if isinstance(data, list) and len(data) > 0:
-                item = data[0]
-            elif isinstance(data, dict):
-                item = data
-            else:
+            # Now get its generated content
+            url = f"{self.API_BASE_URL}/api/v1/reports/{report_id}/generated-content"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code != 200:
                 return None
             
-            # Parse content JSON if needed
-            content_str = item.get('content', '{}')
+            content_items = response.json()
+            
+            # Find reel (content_type_id = 8)
+            for item in content_items:
+                if item.get('content_type_id') == self.INSTAGRAM_REEL_CONTENT_ID:
+                    content_str = item.get('content', '{}')
+                    try:
+                        content_json = json.loads(content_str) if isinstance(content_str, str) else content_str
+                    except:
+                        content_json = {}
+                    
+                    print(f"   ✅ Found reel!")
+                    return {
+                        'report_id': report_id,
+                        'video_url': item.get('file_url'),
+                        'title': item.get('title', ''),
+                        'description': item.get('description', ''),
+                        'content': content_json
+                    }
+            
+            return None
+            
+        except Exception as e:
+            print(f"   ⚠️  Method 1 error: {e}")
+            return None
+    
+    def _get_reel_from_db(self, report_id: int) -> Optional[Dict]:
+        """جلب reel من database مباشرة (fallback)"""
+        
+        if not self.cursor:
+            return None
+        
+        try:
+            sql = """
+                SELECT id, title, description, content, file_url
+                FROM generated_content
+                WHERE report_id = %s 
+                AND content_type_id = %s
+                LIMIT 1
+            """
+            
+            self.cursor.execute(sql, (report_id, self.INSTAGRAM_REEL_CONTENT_ID))
+            result = self.cursor.fetchone()
+            
+            if not result:
+                return None
+            
+            content_str = result[3] or '{}'
             try:
                 content_json = json.loads(content_str) if isinstance(content_str, str) else content_str
             except:
                 content_json = {}
             
+            print(f"   ✅ Found reel in database!")
             return {
-                'video_url': item.get('file_url'),
-                'title': item.get('title', ''),
-                'description': item.get('description', ''),
+                'report_id': report_id,
+                'video_url': result[4],
+                'title': result[1] or '',
+                'description': result[2] or '',
                 'content': content_json
             }
             
         except Exception as e:
-            print(f"❌ Error getting reel: {e}")
+            print(f"   ⚠️  Method 2 error: {e}")
             return None
     
     def _get_image_url(self, report_id: int) -> Optional[str]:
-        """جلب URL الصورة (Generated → Original)"""
+        """
+        جلب URL الصورة
+        Priority: Generated → Original
+        """
         
-        # Try Generated
+        # Try Generated first
+        print("   🔍 Trying generated image...")
         url = self._get_generated_image_url(report_id)
         if url:
             return url
         
         # Try Original
+        print("   🔍 Trying original image...")
         url = self._get_original_image_url(report_id)
         if url:
             return url
@@ -424,7 +513,16 @@ class InstagramPublisher:
     # ==========================================
     
     def _format_caption(self, title: str, content: str) -> str:
-        """تنسيق caption لـ Instagram Post"""
+        """تنسيق caption لـ Instagram Post مع إصلاح المسافات"""
+        
+        # إصلاح المسافات في النص
+        print(f"   🔧 Original title: {title[:50]}...")
+        title = self._fix_text_spacing(title)
+        print(f"   ✅ Fixed title: {title[:50]}...")
+        
+        print(f"   🔧 Original content: {content[:50]}...")
+        content = self._fix_text_spacing(content)
+        print(f"   ✅ Fixed content: {content[:50]}...")
         
         # فصل المحتوى عن الهاشتاجات
         hashtag_start = content.find('#')
@@ -433,11 +531,24 @@ class InstagramPublisher:
             main_content = content[:hashtag_start].strip()
             hashtags = content[hashtag_start:].strip()
             hashtags = self._format_hashtags(hashtags)
-            print(f"   📌 Hashtags: {hashtags[:50]}...")
+            print(f"   📌 Hashtags found: {hashtags[:50]}...")
         else:
             main_content = content.strip()
             hashtags = ''
-            print(f"   ⚠️  No hashtags found")
+            print(f"   ⚠️  No hashtags in content")
+            
+            # Try to extract from title if it has hashtags
+            if '#' in title:
+                title_parts = title.split('#', 1)
+                title = title_parts[0].strip()
+                hashtags = '#' + title_parts[1].strip()
+                hashtags = self._format_hashtags(hashtags)
+                print(f"   📌 Hashtags from title: {hashtags[:50]}...")
+        
+        # لو ما في hashtags، نولدهم بـ Gemini
+        if not hashtags and self.gemini_model:
+            print(f"   🤖 Generating hashtags with Gemini...")
+            hashtags = self._generate_hashtags(title + ' ' + main_content)
         
         # تجميع Caption
         result = []
@@ -458,16 +569,207 @@ class InstagramPublisher:
         
         # Instagram caption limit
         if len(caption) > self.IG_CAPTION_MAX:
-            caption = caption[:self.IG_CAPTION_MAX - 50] + "...\n\n" + hashtags
+            # Keep hashtags, truncate content
+            if hashtags:
+                max_content = self.IG_CAPTION_MAX - len(hashtags) - 100
+                caption_without_hashtags = '\n\n'.join(result[:-1])
+                caption = caption_without_hashtags[:max_content] + "...\n\n" + hashtags
+            else:
+                caption = caption[:self.IG_CAPTION_MAX - 10] + "..."
+        
+        print(f"   ✅ Caption ready ({len(caption)} chars)")
         
         return caption
     
-    def _format_reel_caption(self, reel_content: Dict) -> str:
-        """تنسيق caption لـ Instagram Reel"""
+    def _fix_text_spacing(self, text: str) -> str:
+        """
+        إصلاح المسافات في النص العربي باستخدام Gemini
         
+        يفصل الكلمات الملتصقة ويضيف مسافات صحيحة
+        """
+        
+        if not text or len(text.strip()) < 10:
+            return text
+        
+        # لو في Gemini، نستخدمه
+        if self.gemini_model:
+            try:
+                fixed = self._fix_spacing_with_gemini(text)
+                if fixed and len(fixed) > len(text) * 0.8:  # Sanity check
+                    return fixed
+            except Exception as e:
+                print(f"   ⚠️  Gemini spacing fix failed: {e}")
+        
+        # Fallback: basic regex fixes
+        return self._basic_spacing_fix(text)
+    
+    def _fix_spacing_with_gemini(self, text: str) -> str:
+        """استخدام Gemini لإصلاح المسافات"""
+        
+        prompt = f"""أنت خبير في تنسيق النصوص العربية.
+
+المهمة: أصلح المسافات في هذا النص. الكلمات ملتصقة ببعضها ومحتاجة مسافات.
+
+القواعد:
+1. ضع مسافة بين كل كلمتين
+2. ضع مسافة قبل وبعد علامات الترقيم
+3. لا تغير أي كلمة أو حرف - فقط أضف مسافات
+4. احترم الأرقام والإيموجي - لا تغيرهم
+5. أرجع النص المصلح فقط بدون أي شرح أو مقدمات
+
+النص الأصلي:
+{text}
+
+النص المصلح (فقط النص، بدون مقدمات):"""
+        
+        response = self.gemini_model.generate_content(prompt)
+        fixed_text = response.text.strip()
+        
+        # تنظيف أي مقدمات
+        unwanted_starts = ['النص المصلح:', 'إليك النص:', 'هنا النص:', 'التصحيح:']
+        for prefix in unwanted_starts:
+            if fixed_text.startswith(prefix):
+                fixed_text = fixed_text[len(prefix):].strip()
+                break
+        
+        # إزالة أي backticks
+        fixed_text = fixed_text.replace('```', '').strip()
+        
+        return fixed_text
+    
+    def _basic_spacing_fix(self, text: str) -> str:
+        """إصلاح بسيط للمسافات (fallback)"""
+        
+        import re
+        
+        # إضافة مسافة قبل علامات الترقيم العربية
+        text = re.sub(r'([^\s])([؟،؛])', r'\1 \2', text)
+        
+        # إضافة مسافة بعد علامات الترقيم
+        text = re.sub(r'([؟،؛:\.!])([^\s])', r'\1 \2', text)
+        
+        # إضافة مسافة بين كلمة عربية ورقم
+        text = re.sub(r'([\u0600-\u06FF])(\d)', r'\1 \2', text)
+        text = re.sub(r'(\d)([\u0600-\u06FF])', r'\1 \2', text)
+        
+        # إضافة مسافة بين كلمة عربية وحرف إنجليزي
+        text = re.sub(r'([\u0600-\u06FF])([a-zA-Z])', r'\1 \2', text)
+        text = re.sub(r'([a-zA-Z])([\u0600-\u06FF])', r'\1 \2', text)
+        
+        # تنظيف المسافات المتعددة
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
+    
+    def _generate_hashtags(self, text: str) -> str:
+        """
+        توليد hashtags مناسبة للمحتوى باستخدام Gemini
+        """
+        
+        try:
+            # نأخذ أول 500 حرف من المحتوى للسياق
+            context = text[:500] if len(text) > 500 else text
+            
+            prompt = f"""أنت خبير في السوشيال ميديا والهاشتاجات.
+
+المهمة: ولّد 5-8 هاشتاجات عربية مناسبة لهذا المحتوى.
+
+القواعد:
+1. الهاشتاجات يجب أن تكون ذات صلة بالمحتوى
+2. استخدم كلمات شائعة ومطلوبة في البحث
+3. الهاشتاجات يجب أن تكون قصيرة (كلمة-3 كلمات)
+4. افصل الكلمات بـ _ للقراءة
+5. أرجع الهاشتاجات فقط (كل واحد في سطر)
+
+المحتوى:
+{context}
+
+الهاشتاجات (فقط الهاشتاجات، بدون شرح):"""
+            
+            response = self.gemini_model.generate_content(prompt)
+            hashtags_text = response.text.strip()
+            
+            # استخراج الهاشتاجات
+            hashtags = []
+            for line in hashtags_text.split('\n'):
+                line = line.strip()
+                if line.startswith('#'):
+                    hashtags.append(line)
+            
+            # لو ما رجع hashtags، نستخدم fallback
+            if not hashtags:
+                return ""
+            
+            result = ' '.join(hashtags[:8])  # أقصى 8 هاشتاجات
+            print(f"   ✅ Generated {len(hashtags)} hashtags")
+            
+            return result
+            
+        except Exception as e:
+            print(f"   ⚠️  Hashtag generation failed: {e}")
+            return ""
+    
+    def _format_reel_caption(self, reel_content: Dict) -> str:
+        """
+        تنسيق caption لـ Instagram Reel
+        
+        يستخدم عنوان ومحتوى Instagram
+        """
+        
+        # Method 1: استخدام Instagram content من social_media
+        report_id = reel_content.get('report_id')
+        if report_id:
+            ig_content = self._get_instagram_content(report_id)
+            if ig_content:
+                title = ig_content.get('title', '')
+                content = ig_content.get('content', '')
+                
+                # إصلاح المسافات
+                title = self._fix_text_spacing(title)
+                content = self._fix_text_spacing(content)
+                
+                # استخراج الهاشتاجات
+                hashtag_start = content.find('#')
+                if hashtag_start != -1:
+                    main_content = content[:hashtag_start].strip()
+                    hashtags = content[hashtag_start:].strip()
+                    hashtags = self._format_hashtags(hashtags)
+                else:
+                    main_content = content.strip()
+                    hashtags = ''
+                
+                # لو ما في hashtags، نولدهم
+                if not hashtags and self.gemini_model:
+                    print(f"   🤖 Generating hashtags for reel...")
+                    hashtags = self._generate_hashtags(title + ' ' + main_content)
+                
+                # تجميع Caption
+                result = []
+                if title:
+                    result.append(title)
+                if main_content:
+                    # نأخذ أول 200 حرف من المحتوى للـ reel
+                    short_content = main_content[:200] + '...' if len(main_content) > 200 else main_content
+                    result.append(short_content)
+                if hashtags:
+                    result.append(hashtags)
+                
+                caption = '\n\n'.join(result)
+                
+                # Instagram Reel caption limit
+                if len(caption) > self.IG_CAPTION_MAX:
+                    caption = caption[:self.IG_CAPTION_MAX - 50] + "..."
+                
+                return caption
+        
+        # Method 2: Fallback - استخدام reel_content نفسه
         title = reel_content.get('title', '')
         description = reel_content.get('description', '')
         content = reel_content.get('content', {})
+        
+        # إصلاح المسافات
+        title = self._fix_text_spacing(title)
+        description = self._fix_text_spacing(description)
         
         # محاولة استخراج caption و hashtags من content
         if isinstance(content, dict):
@@ -477,9 +779,16 @@ class InstagramPublisher:
             caption_text = description
             hashtags_text = ''
         
+        caption_text = self._fix_text_spacing(caption_text)
+        
         # تنسيق الهاشتاجات
         if hashtags_text and self.gemini_model:
             hashtags_text = self._format_hashtags(hashtags_text)
+        
+        # لو ما في hashtags، نولدهم
+        if not hashtags_text and self.gemini_model:
+            print(f"   🤖 Generating hashtags for reel...")
+            hashtags_text = self._generate_hashtags(title + ' ' + caption_text)
         
         # تجميع
         result = []
@@ -488,7 +797,8 @@ class InstagramPublisher:
             result.append(title)
         
         if caption_text:
-            result.append(caption_text)
+            short_caption = caption_text[:200] + '...' if len(caption_text) > 200 else caption_text
+            result.append(short_caption)
         
         if hashtags_text:
             result.append(hashtags_text)
@@ -645,19 +955,33 @@ class InstagramPublisher:
             'access_token': self.FB_ACCESS_TOKEN
         }
         
+        print(f"   📍 Container URL: {url}")
+        print(f"   🖼️ Image URL: {image_url[:50]}...")
+        
         try:
             response = requests.post(url, data=payload, timeout=30)
             result = response.json()
             
+            print(f"   📦 API Response: {result}")
+            
             if 'id' in result:
+                print(f"   ✅ Container created: {result['id']}")
                 return result['id']
             else:
-                error = result.get('error', {}).get('message', 'Unknown')
-                print(f"   ❌ Container error: {error}")
+                error = result.get('error', {})
+                error_msg = error.get('message', 'Unknown')
+                error_code = error.get('code', 'N/A')
+                error_type = error.get('type', 'N/A')
+                
+                print(f"   ❌ Container error:")
+                print(f"      Message: {error_msg}")
+                print(f"      Code: {error_code}")
+                print(f"      Type: {error_type}")
+                
                 return None
                 
         except Exception as e:
-            print(f"   ❌ Container error: {e}")
+            print(f"   ❌ Container exception: {e}")
             return None
     
     def _create_reel_container(self, video_url: str, caption: str) -> Optional[str]:

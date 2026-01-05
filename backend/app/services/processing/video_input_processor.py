@@ -61,8 +61,7 @@ class VideoInputProcessor:
             video_file_id = self.audio_processor._save_uploaded_file_metadata(
                 original_filename=original_filename,
                 stored_filename=video_s3_key.split('/')[-1],
-                file_path=video_s3_key,
-                file_size=video_size,
+                file_path=video_url,                file_size=video_size,
                 file_type='video',
                 mime_type=mime_type
             )

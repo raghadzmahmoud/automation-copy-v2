@@ -152,7 +152,7 @@ class AudioInputProcessor:
             uploaded_file_id = self._save_uploaded_file_metadata(
                 original_filename=file.filename,
                 stored_filename=stored_filename,
-                file_path=s3_key,
+               file_path=audio_url,
                 file_size=file_size,
                 file_type='audio',
                 mime_type=mime_type
@@ -171,7 +171,7 @@ class AudioInputProcessor:
             # Step 3: تحويل الصوت إلى نص (STT)
             # ========================================
             print("\n🎙️ Step 3: Speech-to-Text...")
-            stt_result = self._transcribe_audio(audio_url)
+            stt_result = self._transcribe_audio(audio_url, mime_type) 
             
             if not stt_result['success']:
                 # Update status
@@ -404,16 +404,36 @@ class AudioInputProcessor:
             print(f"⚠️  Error updating status: {e}")
             self.conn.rollback()
     
-    def _transcribe_audio(self, audio_url: str) -> Dict:
-        """تحويل الصوت إلى نص"""
-        try:
-            result = self.stt_service.transcribe_audio(audio_url)
-            return result
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
+    def _transcribe_audio(self, audio_url: str, mime_type: str = None) -> Dict:
+    """
+    تحويل الصوت إلى نص - مع دعم WebM
+    """
+    
+    try:
+        # Check if needs conversion
+        if mime_type and self.audio_converter.needs_conversion(mime_type):
+            print(f"   🔄 Converting {mime_type} to WAV...")
+            
+            # Convert
+            wav_data = self.audio_converter.convert_to_wav(audio_url)
+            
+            if not wav_data:
+                return {'success': False, 'error': 'Conversion failed'}
+            
+            # Upload converted
+            from fastapi import UploadFile
+            wav_file = UploadFile(filename='converted.wav', file=wav_data)
+            upload_result = self._upload_to_s3(wav_file, file_type='audio')
+            
+            # Use converted URL
+            audio_url = upload_result['url']
+        
+        # Transcribe (original or converted)
+        result = self.stt_service.transcribe_audio(audio_url)
+        return result
+        
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
     
     def _refine_text(self, raw_text: str) -> Dict:
         """تحسين النص العامي إلى خبر احترافي"""
