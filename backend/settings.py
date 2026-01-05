@@ -46,3 +46,9 @@ S3_GENERATED_VIDEOS_FOLDER = os.getenv('S3_GENERATED_VIDEOS_FOLDER', 'generated/
 # ============================================
 MAX_AUDIO_SIZE_MB = int(os.getenv('MAX_AUDIO_SIZE_MB', 50))
 ALLOWED_AUDIO_FORMATS = os.getenv('ALLOWED_AUDIO_FORMATS', 'mp3,wav,ogg,m4a,webm').split(',')
+
+
+FB_ACCESS_TOKEN = os.getenv('FB_ACCESS_TOKEN')
+FB_PAGE_ID = os.getenv('FB_PAGE_ID')
+IG_USER_ID = os.getenv('IG_USER_ID') 
+API_BASE_URL = os.getenv('API_BASE_URL')
