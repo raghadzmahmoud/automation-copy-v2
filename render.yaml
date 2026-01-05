@@ -6,8 +6,8 @@ services:
   - type: worker
     name: automation-worker
     env: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend/
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./
     
     # Environment variables (values to be set manually in Render Dashboard)
     envVars:
