@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import boto3
+from PIL import Image, ImageEnhance
 
 from settings import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, DB_CONFIG
 
@@ -93,6 +94,16 @@ class ImageGenerator:
         
         # Content Type ID for Generated Images
         self.content_type_id = 6
+        
+        # Facebook-optimized image settings
+        self.facebook_specs = {
+            'width': 1200,
+            'height': 630,
+            'ratio': 1.91,
+            'quality': 95
+        }
+        
+        print(f"📐 Facebook-optimized specs: {self.facebook_specs['width']}×{self.facebook_specs['height']}px")
         
         # ✅ إنشاء جدول تتبع الفشل إذا ما كان موجود
         self._ensure_failure_tracking_table()
@@ -339,13 +350,13 @@ class ImageGenerator:
         return stats
     
     def _create_image_prompt(self, report: Dict) -> str:
-        """Create a neutral, generic news illustration image prompt"""
+        """Create a neutral, generic news illustration image prompt optimized for Facebook"""
 
         keywords = self._extract_keywords(report['title'], report['content'])
         context = ", ".join(keywords[:3])
 
         prompt = f"""
-    Create a neutral, realistic, high-quality news illustration image.
+    Create a neutral, realistic, high-quality news illustration image optimized for Facebook sharing.
 
     Context (for understanding only, do NOT visualize text or symbols):
     {context}
@@ -366,8 +377,12 @@ class ImageGenerator:
     - Clean background or relevant environment
     - Documentary-style realism
 
-    Framing:
-    - Wide horizontal shot (16:9)
+    Technical Specifications:
+    - Aspect ratio: 1.91:1 (Facebook optimized)
+    - Horizontal orientation (landscape)
+    - High resolution and quality
+    - Safe zone composition (important elements centered)
+    - Suitable for social media sharing
     - Suitable as a background image for news content
     - Contextual but non-specific
 
@@ -417,6 +432,63 @@ No text, no faces, no watermarks
                 break
         
         return unique_keywords
+    
+    def _optimize_for_facebook(self, image: Image.Image) -> Image.Image:
+        """Optimize image for Facebook specifications"""
+        
+        # Facebook optimal dimensions
+        target_width = self.facebook_specs['width']
+        target_height = self.facebook_specs['height']
+        
+        print(f"   📐 Optimizing for Facebook: {target_width}×{target_height}px")
+        
+        # Convert to RGB if needed
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Calculate scaling to fit Facebook dimensions
+        img_width, img_height = image.size
+        img_ratio = img_width / img_height
+        target_ratio = target_width / target_height
+        
+        if img_ratio > target_ratio:
+            # Image is wider - fit by height
+            new_height = target_height
+            new_width = int(target_height * img_ratio)
+        else:
+            # Image is taller - fit by width
+            new_width = target_width
+            new_height = int(target_width / img_ratio)
+        
+        # Resize image
+        resized = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Crop to exact Facebook dimensions (center crop)
+        left = (new_width - target_width) // 2
+        top = (new_height - target_height) // 2
+        right = left + target_width
+        bottom = top + target_height
+        
+        cropped = resized.crop((left, top, right, bottom))
+        
+        # Enhance for social media
+        from PIL import ImageEnhance
+        
+        # Slight brightness boost
+        enhancer = ImageEnhance.Brightness(cropped)
+        enhanced = enhancer.enhance(1.05)
+        
+        # Slight contrast boost
+        enhancer = ImageEnhance.Contrast(enhanced)
+        enhanced = enhancer.enhance(1.1)
+        
+        # Slight color saturation boost
+        enhancer = ImageEnhance.Color(enhanced)
+        enhanced = enhancer.enhance(1.1)
+        
+        print(f"   ✅ Image optimized: {enhanced.size[0]}×{enhanced.size[1]}px")
+        
+        return enhanced
     
     def _generate_and_upload_image(
         self, 
@@ -473,19 +545,22 @@ No text, no faces, no watermarks
                     
                     temp_image = Image.open(io.BytesIO(decoded_data))
                     
+                    # Optimize for Facebook
+                    optimized_image = self._optimize_for_facebook(temp_image)
+                    
                     byteImgIO = io.BytesIO()
-                    temp_image.save(byteImgIO, "PNG")
+                    optimized_image.save(byteImgIO, "JPEG", quality=self.facebook_specs['quality'])
                     byteImgIO.seek(0)
                     image_bytes = byteImgIO.read()
                     
-                    print(f"   ✅ Converted to PNG ({len(image_bytes):,} bytes)")
+                    print(f"   ✅ Optimized for Facebook ({len(image_bytes):,} bytes)")
                     
                 except Exception as e:
                     raise ValueError(f"Cannot process image data: {e}")
                 
                 # Upload to S3
                 timestamp = int(time.time())
-                file_name = f"report_{report_id}_{timestamp}.png"
+                file_name = f"report_{report_id}_{timestamp}.jpg"
                 s3_key = f"{self.s3_folder}{file_name}"
                 
                 print(f"   📤 Uploading to S3: {s3_key}")
@@ -494,7 +569,7 @@ No text, no faces, no watermarks
                     Bucket=self.bucket_name,
                     Key=s3_key,
                     Body=image_bytes,
-                    ContentType='image/png'
+                    ContentType='image/jpeg'
                 )
                 
                 s3_url = f"https://{self.bucket_name}.s3.amazonaws.com/{s3_key}"

@@ -26,7 +26,13 @@ from settings import DB_CONFIG
 
 class SocialImageGenerator:
     """
-    مولّد صور السوشال ميديا
+    🎨 مولّد صور فيسبوك المحسن
+    
+    المواصفات المثالية لفيسبوك:
+    - الأبعاد: 1200 × 630 بكسل
+    - النسبة: 1.91:1 (الموصى بها رسمياً)
+    - المنطقة الآمنة: النص في المنتصف، الشعار بهامش 20px
+    - الجودة: عالية مع ضغط مناسب
     
     يولد صورتين:
     - h-GAZA (هنا غزة)
@@ -50,9 +56,10 @@ class SocialImageGenerator:
     }
     
     def __init__(self):
-        """Initialize"""
+        """Initialize with Facebook-optimized settings"""
         print("\n" + "=" * 60)
         print("🎨 Social Media Image Generator")
+        print("📐 Facebook Optimized: 1200×630px (1.91:1)")
         print("=" * 60)
         
         self.conn = psycopg2.connect(**DB_CONFIG)
@@ -64,18 +71,45 @@ class SocialImageGenerator:
         self.s3_folder = 'generated/social-images/'
         print("✅ S3 initialized")
         
-        # Image settings
+        # Facebook Image settings - المقاس المثالي لفيسبوك
+        # النسبة: 1.91:1 (الموصى بها رسمياً من فيسبوك)
+        # المقاس: 1200 × 630 بكسل (مثالي للـ Feed)
         self.output_size = (1200, 630)
         
-        # Logo sizes - uniform for consistency
+        # Validate Facebook specs
+        self._validate_facebook_specs()
+        
+        # Logo sizes - أحجام موحدة للشعارات
         self.logo_sizes = {
-            'h-GAZA': (180, 180),
-            # 'n-NEWS': (180, 180),   # معطل
-            # 'n-SPORT': (180, 180),  # معطل
-            'DOT': (180, 180)
+            'h-GAZA': (160, 160),    # حجم أصغر قليلاً للتوازن
+            'DOT': (160, 160)        # حجم موحد
         }
         
         print("=" * 60 + "\n")
+    
+    def _validate_facebook_specs(self):
+        """Validate that settings meet Facebook specifications"""
+        width, height = self.output_size
+        ratio = width / height
+        
+        # Facebook optimal specs
+        fb_width, fb_height = 1200, 630
+        fb_ratio = fb_width / fb_height
+        
+        print(f"📐 Validating Facebook Specs:")
+        print(f"   Current: {width}×{height}px ({ratio:.2f}:1)")
+        print(f"   Facebook: {fb_width}×{fb_height}px ({fb_ratio:.2f}:1)")
+        
+        if width == fb_width and height == fb_height:
+            print("   ✅ Perfect match!")
+        else:
+            print("   ⚠️  Dimensions adjusted for Facebook")
+            self.output_size = (fb_width, fb_height)
+        
+        if abs(ratio - fb_ratio) < 0.01:
+            print("   ✅ Aspect ratio optimal for Facebook")
+        else:
+            print("   ⚠️  Aspect ratio adjusted")
     
     def generate_for_all_reports(self, force_update: bool = False, limit: int = 10) -> Dict:
         """
@@ -344,10 +378,11 @@ class SocialImageGenerator:
         return img
     
     def _add_logo(self, img: Image.Image, logo: Image.Image) -> Image.Image:
-        """Add logo to top-left corner - tight to edge"""
-        # Smaller gap - في الزاوية مباشرة
-        x = 10  # كان 30 - صار 10
-        y = 10  # كان 30 - صار 10
+        """Add logo in safe zone for Facebook"""
+        # المنطقة الآمنة لفيسبوك - بعيداً عن الحواف
+        safe_margin = 20  # هامش آمن من الحواف
+        x = safe_margin
+        y = safe_margin
         
         if logo.mode == 'RGBA':
             img.paste(logo, (x, y), logo)
@@ -388,19 +423,23 @@ class SocialImageGenerator:
         
         lines = [get_display(arabic_reshaper.reshape(l)) for l in lines_raw]
         
-        # مسافات أفضل
-        lh = 80  # كان 75 - زدنا المسافة بين الأسطر
+        # إعدادات النص المحسنة لفيسبوك
+        lh = 75  # المسافة بين الأسطر
         max_lw = max([temp.textbbox((0,0), l, font=font)[2]-temp.textbbox((0,0), l, font=font)[0] for l in lines])
         
-        px, py = 70, 45  # padding أكبر شوي
+        # Padding محسن للمنطقة الآمنة في فيسبوك
+        px, py = 60, 40  # padding مناسب
         bw = max_lw + px*2
         bh = len(lines)*lh + py*2
-        bx = (img.size[0]-bw)//2
-        by = img.size[1]-bh-60  # أبعد شوي عن الحافة السفلية
         
+        # وضعية النص في المنطقة الآمنة (وسط الصورة)
+        bx = (img.size[0]-bw)//2
+        by = (img.size[1]-bh)//2  # في المنتصف تماماً للأمان
+        
+        # خلفية النص مع شفافية مناسبة
         overlay = Image.new('RGBA', img.size, (0,0,0,0))
         do = ImageDraw.Draw(overlay)
-        self._draw_rounded_rect(do, [bx,by,bx+bw,by+bh], 25, (0,0,0,210))  # opacity أقوى شوي
+        self._draw_rounded_rect(do, [bx,by,bx+bw,by+bh], 20, (0,0,0,200))  # شفافية مناسبة
         img.paste(overlay, (0,0), overlay)
         
         draw = ImageDraw.Draw(img)
