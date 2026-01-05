@@ -67,19 +67,7 @@ EXPOSE 8000
 
 # Enhanced health check for worker
 HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
-    CMD python -c "
-import sys, os
-sys.path.append('/app')
-try:
-    # Test basic imports
-    from app.services.generators.social_media_image_generator import SocialImageGenerator
-    from app.services.generators.reel_generator import ReelGenerator
-    import arabic_reshaper, bidi
-    print('✅ Worker health check passed - all components ready')
-except Exception as e:
-    print(f'❌ Worker health check failed: {e}')
-    sys.exit(1)
-" || exit 1
+    CMD python -c "import sys, os; sys.path.append('/app'); from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; import arabic_reshaper, bidi; print('✅ Worker health check passed')" || exit 1
 
 # Flexible worker startup based on WORKER_TYPE environment variable
 CMD ["sh", "-c", "if [ \"$WORKER_TYPE\" = \"media\" ]; then python test_media_worker.py --continuous; else python start_worker_improved.py; fi"]
