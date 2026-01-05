@@ -30,7 +30,7 @@ class ReportData:
     title: str
     content: str
     
-    def is_valid(self, min_words: int = 30, max_words: int = 300) -> Tuple[bool, str]:
+    def is_valid(self, min_words: int = 25, max_words: int = 300) -> Tuple[bool, str]:
         """التحقق من صحة البيانات"""
         if not self.title or len(self.title.strip()) < 10:
             return False, "العنوان قصير جداً"
