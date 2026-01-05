@@ -3,11 +3,12 @@
 """
 📻 Unified Broadcast Generator V2
 ═══════════════════════════════════════════════════════════════
-نظام موحد لتوليد النشرات والموجزات
+نظام موحد لتوليد النشرات والموجزات - هنا غزة
 
 المبدأ:
 - X = كل كم ساعة (period_hours)
 - Y = كم مدة السكريبت (target_duration_minutes)
+- صباحي (6:00 - 17:59) / مسائي (18:00 - 5:59)
 
 الإعدادات من جدول: broadcast_configs
 ═══════════════════════════════════════════════════════════════
@@ -117,6 +118,7 @@ class BroadcastResult:
     word_count: int = 0
     duration_seconds: int = 0
     skipped: bool = False
+    is_morning: bool = True  # صباحي أو مسائي
 
 
 # ============================================
@@ -125,7 +127,7 @@ class BroadcastResult:
 
 class BroadcastGenerator:
     """
-    مولد البث الموحد
+    مولد البث الموحد - هنا غزة
     يقرأ الإعدادات من broadcast_configs ويولد حسب النوع
     """
     
@@ -134,6 +136,16 @@ class BroadcastGenerator:
         self.cursor = self.conn.cursor()
         self.client = genai.Client(api_key=GEMINI_API_KEY)
         print("✅ BroadcastGenerator initialized")
+    
+    
+    def _is_morning(self, config: BroadcastConfig) -> bool:
+        """
+        تحديد إذا كان الوقت صباحي أو مسائي
+        صباحي: من morning_start_hour إلى evening_start_hour
+        مسائي: من evening_start_hour إلى morning_start_hour
+        """
+        current_hour = datetime.now().hour
+        return config.morning_start_hour <= current_hour < config.evening_start_hour
     
     
     # ════════════════════════════════════════════════════════════
@@ -229,10 +241,15 @@ class BroadcastGenerator:
                 message=f"Config not found: {config_code}"
             )
         
+        # تحديد صباحي/مسائي
+        is_morning = self._is_morning(config)
+        time_period = "صباحي" if is_morning else "مسائي"
+        
         print(f"⚙️ Config: {config.name}")
         print(f"   • كل {config.period_hours} ساعات")
         print(f"   • مدة {config.target_duration_minutes} دقيقة")
         print(f"   • نوع: {config.content_style}")
+        print(f"   • 🕐 الفترة: {time_period}")
         
         # 2. جلب الأخبار
         print(f"\n📥 جلب {config.news_count} خبر من آخر {config.hours_back} ساعة...")
@@ -242,14 +259,15 @@ class BroadcastGenerator:
             return BroadcastResult(
                 success=False,
                 config_code=config_code,
-                message=f"عدد الأخبار غير كافٍ ({len(reports)})"
+                message=f"عدد الأخبار غير كافٍ ({len(reports)})",
+                is_morning=is_morning
             )
         
         print(f"   ✅ تم جلب {len(reports)} خبر")
         
         # 3. فحص التكرار
         current_report_ids = sorted([r.id for r in reports])
-        skip_result = self._check_if_should_skip(config, current_report_ids)
+        skip_result = self._check_if_should_skip(config, current_report_ids, is_morning)
         if skip_result:
             return skip_result
         
@@ -269,7 +287,7 @@ class BroadcastGenerator:
         
         # 6. بناء السكريبت
         print(f"\n📄 بناء السكريبت...")
-        script = self._build_script(config, reports)
+        script = self._build_script(config, reports, is_morning)
         
         word_count = len(script.split())
         duration_seconds = int((word_count / 150) * 60)
@@ -278,7 +296,7 @@ class BroadcastGenerator:
         
         # 7. حفظ
         print(f"\n💾 حفظ في {config.target_table}...")
-        result = self._save_broadcast(config, reports, script, current_report_ids)
+        result = self._save_broadcast(config, reports, script, current_report_ids, is_morning)
         
         return result
     
@@ -346,7 +364,8 @@ class BroadcastGenerator:
     def _check_if_should_skip(
         self, 
         config: BroadcastConfig, 
-        current_report_ids: List[int]
+        current_report_ids: List[int],
+        is_morning: bool
     ) -> Optional[BroadcastResult]:
         """فحص إذا كانت نفس الأخبار"""
         try:
@@ -381,7 +400,8 @@ class BroadcastGenerator:
                         broadcast_id=last[0],
                         config_code=config.code,
                         message="SKIP - نفس الأخبار",
-                        skipped=True
+                        skipped=True,
+                        is_morning=is_morning
                     )
                 else:
                     new_count = len(set(current_report_ids) - set(last_ids))
@@ -423,11 +443,11 @@ class BroadcastGenerator:
     
     
     # ════════════════════════════════════════════════════════════
-    # ✏️ تحويل العناوين (للموجز) - نسخة محسنة
+    # ✏️ تحويل العناوين (للموجز)
     # ════════════════════════════════════════════════════════════
     
     def _convert_to_headlines(self, reports: List[ReportItem]) -> List[ReportItem]:
-        """تحويل العناوين لجمل اسمية قصيرة - معالجة كل عنوان على حدة"""
+        """تحويل العناوين لجمل اسمية قصيرة"""
         
         for i, report in enumerate(reports):
             print(f"   [{i+1}/{len(reports)}] تحويل: {report.title[:40]}...")
@@ -521,48 +541,66 @@ class BroadcastGenerator:
     
     
     # ════════════════════════════════════════════════════════════
-    # 📄 بناء السكريبت
+    # 📄 بناء السكريبت - هنا غزة (صباحي/مسائي)
     # ════════════════════════════════════════════════════════════
     
-    def _build_script(self, config: BroadcastConfig, reports: List[ReportItem]) -> str:
-        """بناء السكريبت النهائي"""
+    def _build_script(
+        self, 
+        config: BroadcastConfig, 
+        reports: List[ReportItem],
+        is_morning: bool
+    ) -> str:
+        """بناء السكريبت النهائي مع تحديد صباحي/مسائي"""
         lines = []
-        current_hour = datetime.now().hour
         
-        # التحية
-        if config.morning_start_hour <= current_hour < config.evening_start_hour:
+        # التحية حسب الوقت (صباحي/مسائي)
+        if is_morning:
             greeting = config.greeting_morning
         else:
             greeting = config.greeting_evening
         
-        # العنوان
-        lines.append(f"{config.name}")
-        lines.append("")
-        lines.append(greeting)
-        lines.append("")
-        
         if config.content_style == 'headlines':
-            # ═══ موجز: عناوين فقط ═══
+            # ═══════════════════════════════════════════════════════
+            # 📰 موجز: عناوين مع فقرات قصيرة
+            # ═══════════════════════════════════════════════════════
+            
+            # المقدمة
+            lines.append(greeting)
+            lines.append("")
+            
+            # الأخبار (كل خبر بفقرة قصيرة)
             for report in reports:
-                lines.append(report.headline or report.title)
+                headline = report.headline or report.title
+                summary = self._get_short_summary(report.content)
+                
+                lines.append(headline)
+                if summary:
+                    lines.append(summary)
                 lines.append("")
         
         else:
-            # ═══ نشرة: مفصلة ═══
-            # أبرز العناوين
-            top_3 = reports[:3]
-            lines.append("نستهل نشرتنا بأبرز العناوين:")
+            # ═══════════════════════════════════════════════════════
+            # 📻 نشرة: مفصلة مع عناوين بارزة
+            # ═══════════════════════════════════════════════════════
+            
+            # المقدمة
+            lines.append(greeting)
             lines.append("")
+            
+            # أبرز 3 عناوين
+            top_3 = reports[:3]
             for r in top_3:
                 lines.append(f"• {r.title}")
             lines.append("")
-            lines.append("إلى التفاصيل")
+            
+            # الانتقال للتفاصيل
+            lines.append("أهلاً بكم إلى التفاصيل")
             lines.append("")
             
             # الأخبار مفصلة
             for report in reports:
                 lines.append(f"({report.title})")
-                lines.append(report.summary or report.content[:300])
+                lines.append(report.summary or report.content[:500])
                 lines.append("")
         
         # العملات
@@ -579,10 +617,30 @@ class BroadcastGenerator:
             lines.append(self._get_weather())
             lines.append("")
         
-        # الخاتمة
-        lines.append(config.outro_text)
+        # الخاتمة (إذا موجودة)
+        if config.outro_text and config.outro_text.strip():
+            lines.append(config.outro_text)
         
         return "\n".join(lines)
+    
+    
+    def _get_short_summary(self, content: str, max_sentences: int = 2) -> str:
+        """استخراج فقرة قصيرة من المحتوى"""
+        if not content:
+            return ""
+        
+        content = content.strip()
+        sentences = re.split(r'[.،؟!]\s*', content)
+        sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
+        
+        if not sentences:
+            return ""
+        
+        result = '. '.join(sentences[:max_sentences])
+        if result and not result.endswith(('.', '؟', '!')):
+            result += '.'
+        
+        return result
     
     
     def _get_weather(self) -> str:
@@ -604,7 +662,8 @@ class BroadcastGenerator:
         config: BroadcastConfig,
         reports: List[ReportItem],
         script: str,
-        report_ids: List[int]
+        report_ids: List[int],
+        is_morning: bool
     ) -> BroadcastResult:
         """حفظ البث في الجدول المناسب"""
         
@@ -618,6 +677,8 @@ class BroadcastGenerator:
                 'news_count': len(reports),
                 'word_count': word_count,
                 'report_ids': report_ids,
+                'is_morning': is_morning,
+                'time_period': 'صباحي' if is_morning else 'مسائي',
                 'headlines': [
                     {'report_id': r.id, 'title': r.title, 'headline': r.headline or r.title}
                     for r in reports
@@ -640,7 +701,8 @@ class BroadcastGenerator:
                     duration
                 ))
             else:
-                bulletin_type = "صباحية" if 6 <= current_hour < 14 else "مسائية"
+                # نشرة صباحية أو مسائية
+                bulletin_type = "صباحية" if is_morning else "مسائية"
                 self.cursor.execute("""
                     INSERT INTO news_bulletins 
                     (bulletin_type, broadcast_date, content, full_script, estimated_duration_seconds, status)
@@ -657,16 +719,18 @@ class BroadcastGenerator:
             broadcast_id = self.cursor.fetchone()[0]
             self.conn.commit()
             
-            print(f"   ✅ تم الحفظ (ID: {broadcast_id})")
+            time_period = "صباحي" if is_morning else "مسائي"
+            print(f"   ✅ تم الحفظ (ID: {broadcast_id}) - {time_period}")
             
             return BroadcastResult(
                 success=True,
                 broadcast_id=broadcast_id,
                 config_code=config.code,
-                message=f"✅ تم التوليد (ID: {broadcast_id})",
+                message=f"✅ تم التوليد (ID: {broadcast_id}) - {time_period}",
                 news_count=len(reports),
                 word_count=word_count,
-                duration_seconds=duration
+                duration_seconds=duration,
+                is_morning=is_morning
             )
             
         except Exception as e:
@@ -675,7 +739,8 @@ class BroadcastGenerator:
             return BroadcastResult(
                 success=False,
                 config_code=config.code,
-                message=f"خطأ في الحفظ: {str(e)}"
+                message=f"خطأ في الحفظ: {str(e)}",
+                is_morning=is_morning
             )
     
     
@@ -684,10 +749,7 @@ class BroadcastGenerator:
     # ════════════════════════════════════════════════════════════
     
     def generate_all_due(self) -> Dict[str, BroadcastResult]:
-        """
-        توليد كل البثات المستحقة
-        يفحص كل config إذا حان وقته
-        """
+        """توليد كل البثات المستحقة"""
         results = {}
         configs = self.get_all_active_configs()
         
@@ -724,14 +786,14 @@ class BroadcastGenerator:
             last = self.cursor.fetchone()
             
             if not last:
-                return True  # لا يوجد أي بث اليوم
+                return True
             
             hours_since = (datetime.now() - last[0].replace(tzinfo=None)).total_seconds() / 3600
             return hours_since >= config.period_hours
             
         except Exception as e:
             print(f"⚠️ Error checking due: {e}")
-            return True  # في حالة الخطأ، نولد
+            return True
     
     
     def close(self):
@@ -751,7 +813,7 @@ if __name__ == "__main__":
     import sys
     
     print("\n" + "="*70)
-    print("🧪 Testing BroadcastGenerator V2")
+    print("🧪 Testing BroadcastGenerator - هنا غزة")
     print("="*70)
     
     gen = BroadcastGenerator()
@@ -769,7 +831,6 @@ if __name__ == "__main__":
         test_type = sys.argv[1] if len(sys.argv) > 1 else 'both'
         
         if test_type in ['digest', 'both']:
-            # اختبار توليد موجز
             print("\n" + "-"*70)
             print("🧪 Testing Digest Generation...")
             print("-"*70)
@@ -780,13 +841,10 @@ if __name__ == "__main__":
             print(f"   Success: {result.success}")
             print(f"   ID: {result.broadcast_id}")
             print(f"   Skipped: {result.skipped}")
-            print(f"   News Count: {result.news_count}")
-            print(f"   Word Count: {result.word_count}")
-            print(f"   Duration: {result.duration_seconds//60}:{result.duration_seconds%60:02d}")
+            print(f"   Is Morning: {result.is_morning}")
             print(f"   Message: {result.message}")
         
         if test_type in ['bulletin', 'both']:
-            # اختبار توليد نشرة
             print("\n" + "-"*70)
             print("🧪 Testing Bulletin Generation...")
             print("-"*70)
@@ -797,9 +855,7 @@ if __name__ == "__main__":
             print(f"   Success: {result.success}")
             print(f"   ID: {result.broadcast_id}")
             print(f"   Skipped: {result.skipped}")
-            print(f"   News Count: {result.news_count}")
-            print(f"   Word Count: {result.word_count}")
-            print(f"   Duration: {result.duration_seconds//60}:{result.duration_seconds%60:02d}")
+            print(f"   Is Morning: {result.is_morning}")
             print(f"   Message: {result.message}")
         
     except Exception as e:

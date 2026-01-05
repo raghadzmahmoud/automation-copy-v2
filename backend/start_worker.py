@@ -28,7 +28,7 @@ from app.jobs.clustering_job import cluster_news
 from app.jobs.reports_job import generate_reports
 from app.jobs.image_generation_job import generate_images
 from app.jobs.audio_generation_job import generate_audio
-from app.jobs.bulletin_digest_job import generate_bulletin_job, generate_digest_job
+from app.jobs.broadcast_job import generate_all_broadcasts  # ✅ تم التغيير
 from app.jobs.social_media_job import generate_social_media_content
 from app.jobs.reel_generation_job import generate_reels
 
@@ -64,13 +64,13 @@ TASKS = {
         'func': generate_audio,
         'interval': 3600,             # 1 hour
     },
-    'bulletin_generation': {
-        'func': generate_bulletin_job,
-        'interval': 7200,             # 2 hours
-    },
-    'digest_generation': {
-        'func': generate_digest_job,
-        'interval': 7200,             # 2 hours
+    # ═══════════════════════════════════════════════════════════
+    # ✅ تم التغيير: نظام البث الموحد بدل bulletin_generation و digest_generation
+    # يفحص broadcast_configs ويولد حسب period_hours + صوت تلقائي
+    # ═══════════════════════════════════════════════════════════
+    'broadcast_generation': {
+        'func': generate_all_broadcasts,
+        'interval': 1800,             # 30 minutes
     },
     'social_media_generation': {
         'func': generate_social_media_content,
@@ -80,7 +80,6 @@ TASKS = {
         'func': generate_reels,
         'interval': 3600,             # 1 hour
     }
- 
 }
 
 # Task functions mapping (populated from TASKS)
