@@ -30,6 +30,7 @@ from app.jobs.image_generation_job import generate_images
 from app.jobs.audio_generation_job import generate_audio
 from app.jobs.bulletin_digest_job import generate_bulletin_job, generate_digest_job
 from app.jobs.social_media_job import generate_social_media_content
+from app.jobs.social_media_image_job import generate_social_media_images
 from app.jobs.reel_generation_job import generate_reels
 
 # Set SSL certificate environment variable
@@ -74,6 +75,10 @@ TASKS = {
     },
     'social_media_generation': {
         'func': generate_social_media_content,
+        'interval': 1800,             # 30 minutes
+    },
+    'social_media_image_generation': {
+        'func': generate_social_media_images,
         'interval': 1800,             # 30 minutes
     },
     'reel_generation': {

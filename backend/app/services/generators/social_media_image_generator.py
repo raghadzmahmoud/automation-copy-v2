@@ -80,6 +80,11 @@ class SocialImageGenerator:
     def generate_for_all_reports(self, force_update: bool = False, limit: int = 10) -> Dict:
         """
         🎯 Batch processing للـ Worker
+        يولد صور فيسبوك للتقارير المنشورة (published)
+        
+        الأولوية للصور:
+        1. Generated Image (content_type_id = 6) - الصورة المولدة
+        2. Raw News Image - صورة من الأخبار الخام
         """
         
         print(f"\n{'='*70}")
@@ -166,29 +171,28 @@ class SocialImageGenerator:
         return {'success': len(results) > 0, 'images': results}
     
     def _get_reports_needing_images(self, force_update: bool, limit: int) -> List[int]:
-        """Get reports"""
+        """Get all reports that need Facebook images (any status)"""
         try:
             if force_update:
+                # Force update: get latest reports regardless of existing Facebook images
                 self.cursor.execute("""
                     SELECT id FROM generated_report 
-                    WHERE status = 'published'
-                    ORDER BY created_at DESC LIMIT %s
+                    ORDER BY id DESC LIMIT %s
                 """, (limit,))
             else:
+                # Normal mode: get reports without Facebook images
                 self.cursor.execute("""
-                    SELECT gr.id FROM generated_report gr
-                    WHERE gr.status = 'published'
-                      AND NOT EXISTS (
-                          SELECT 1 FROM generated_content gc
-                          WHERE gc.report_id = gr.id
-                            AND gc.content_type_id = %s
-                            AND gc.status = 'completed'
-                      )
-                    ORDER BY gr.created_at DESC LIMIT %s
+                    SELECT r.id FROM generated_report r
+                    LEFT JOIN generated_content gc 
+                        ON gc.report_id = r.id 
+                        AND gc.content_type_id = %s
+                    WHERE gc.id IS NULL
+                    ORDER BY r.id DESC LIMIT %s
                 """, (self.FACEBOOK_TEMPLATE_ID, limit))
             
             return [r[0] for r in self.cursor.fetchall()]
-        except:
+        except Exception as e:
+            print(f"   ⚠️  Error getting reports: {e}")
             self.conn.rollback()
             return []
     
@@ -202,40 +206,52 @@ class SocialImageGenerator:
             return None
     
     def _get_background_image(self, report_id: int) -> Optional[str]:
-        """Get image"""
+        """
+        Get background image with priority:
+        1. Generated image (content_type_id = 6) - الأولوية للصورة المولدة
+        2. Raw news image from cluster - إذا ما في مولدة، نأخذ من الأخبار
+        """
+        
+        # Priority 1: Generated image (content_type_id = 6)
+        try:
+            self.cursor.execute("""
+                SELECT file_url FROM generated_content
+                WHERE report_id = %s AND content_type_id = 6
+                    AND file_url IS NOT NULL AND file_url != ''
+                ORDER BY created_at DESC LIMIT 1
+            """, (report_id,))
+            
+            result = self.cursor.fetchone()
+            if result and result[0]:
+                print(f"   📸 Using generated image: {result[0][:50]}...")
+                return result[0]
+        except Exception as e:
+            print(f"   ⚠️  Error getting generated image: {e}")
+            self.conn.rollback()
+        
+        # Priority 2: Raw news image from cluster
         try:
             self.cursor.execute("SELECT cluster_id FROM generated_report WHERE id = %s", (report_id,))
-            c = self.cursor.fetchone()
+            cluster_result = self.cursor.fetchone()
             
-            if c:
+            if cluster_result and cluster_result[0]:
                 self.cursor.execute("""
                     SELECT rn.content_img FROM raw_news rn
                     JOIN news_cluster_members ncm ON ncm.news_id = rn.id
                     WHERE ncm.cluster_id = %s
                         AND rn.content_img IS NOT NULL AND rn.content_img != ''
                     ORDER BY rn.collected_at DESC LIMIT 1
-                """, (c[0],))
+                """, (cluster_result[0],))
                 
-                r = self.cursor.fetchone()
-                if r and r[0]:
-                    return r[0]
-        except:
+                result = self.cursor.fetchone()
+                if result and result[0]:
+                    print(f"   📸 Using raw news image: {result[0][:50]}...")
+                    return result[0]
+        except Exception as e:
+            print(f"   ⚠️  Error getting raw news image: {e}")
             self.conn.rollback()
         
-        try:
-            self.cursor.execute("""
-                SELECT file_url FROM generated_content
-                WHERE report_id = %s AND content_type_id = 6
-                    AND file_url IS NOT NULL
-                ORDER BY created_at DESC LIMIT 1
-            """, (report_id,))
-            
-            r = self.cursor.fetchone()
-            if r and r[0]:
-                return r[0]
-        except:
-            self.conn.rollback()
-        
+        print(f"   ❌ No background image found for report {report_id}")
         return None
     
     def _save_to_generated_content(self, report_id: int, images: Dict, force_update: bool) -> str:
