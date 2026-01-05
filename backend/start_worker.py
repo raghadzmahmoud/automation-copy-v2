@@ -51,39 +51,39 @@ TASKS = {
     },
     'clustering': {
         'func': cluster_news,
-        'interval': 1800,             # 30 minutes
+        'interval': 1000,              
     },
     'report_generation': {
         'func': generate_reports,
-        'interval': 3600,             # 1 hour
+        'interval': 1300,             
     },
     'image_generation': {
         'func': generate_images,
-        'interval': 3600,             # 1 hour
+        'interval': 1800,             
     },
     'audio_generation': {
         'func': generate_audio,
-        'interval': 3600,             # 1 hour
+        'interval': 1800,             
     },
     'bulletin_generation': {
         'func': generate_bulletin_job,
-        'interval': 7200,             # 2 hours
+        'interval': 7200,            
     },
     'digest_generation': {
         'func': generate_digest_job,
-        'interval': 7200,             # 2 hours
+        'interval': 7200,             
     },
     'social_media_generation': {
         'func': generate_social_media_content,
-        'interval': 1800,             # 30 minutes
+        'interval': 1800,             
     },
     'social_media_image_generation': {
         'func': generate_social_media_images,
-        'interval': 1800,             # 30 minutes
+        'interval': 2000,             
     },
     'reel_generation': {
         'func': generate_reels,
-        'interval': 3600,             # 1 hour
+        'interval': 2000,             
     }
  
 }
