@@ -13,8 +13,8 @@ services:
     env: docker
     
     # ⚠️ مهم: استخدم Dockerfile.worker
-    dockerfilePath: ./Dockerfile.worker
-    dockerContext: ./
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
     
     # Plan
     plan: standard
@@ -90,7 +90,7 @@ services:
       
       # Google Cloud
       - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: ./n8nraghad-7fc0064b9857.json
+        value: /app/n8nraghad-7fc0064b9857.json
       - key: GOOGLE_CREDENTIALS_JSON
         sync: false
       
