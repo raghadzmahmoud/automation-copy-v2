@@ -59,6 +59,9 @@ test_*.py
 *_test.py
 tests/
 
+# Exception: Keep media worker
+!test_media_worker.py
+
 # Development files
 .env.example
 debug_*.py
