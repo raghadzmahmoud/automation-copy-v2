@@ -34,7 +34,7 @@ class FacebookPublisher:
         
         # h-GAZA Credentials
         self.FB_GAZA_ACCESS_TOKEN = fb_gaza_access_token or os.getenv('FB_GAZA_ACCESS_TOKEN') or os.getenv('FB_ACCESS_TOKEN')
-        self.FB_GAZA_PAGE_ID = fb_gaza_page_id or os.getenv('FB_GAZA_PAGE_ID') or os.getenv('FB_PAGE_ID') or "893918783798150"
+        self.FB_GAZA_PAGE_ID = fb_gaza_page_id or os.getenv('FB_GAZA_PAGE_ID') or os.getenv('FB_PAGE_ID') 
         
         # DOT Credentials
         self.FB_DOT_ACCESS_TOKEN = fb_dot_access_token or os.getenv('FB_DOT_ACCESS_TOKEN') or self.FB_GAZA_ACCESS_TOKEN

@@ -917,7 +917,7 @@ class InstagramPublisher:
             return {'success': False, 'message': str(e)}
     
     def _publish_instagram_reel(self, video_url: str, caption: str) -> Dict:
-        """نشر Reel على Instagram"""
+        """نشر Reel على Instagram - IMPROVED VERSION"""
         
         try:
             # Step 1: Create container
@@ -925,24 +925,36 @@ class InstagramPublisher:
             container_id = self._create_reel_container(video_url, caption)
             
             if not container_id:
-                return {'success': False, 'message': 'Failed to create container'}
+                return {'success': False, 'message': 'Failed to create reel container'}
             
-            # Step 2: Wait for processing
+            print(f"   ✅ Container created: {container_id}")
+            
+            # Step 2: Wait for processing - CRITICAL STEP
             print("   ⏳ Waiting for video processing...")
-            if not self._wait_for_container_ready(container_id):
-                return {'success': False, 'message': 'Video processing timeout'}
+            processing_success = self._wait_for_container_ready(container_id)
             
-            # Step 3: Publish
-            print("   🚀 Publishing reel...")
+            if not processing_success:
+                return {
+                    'success': False, 
+                    'message': 'Video processing failed or timed out. Container not ready for publishing.'
+                }
+            
+            print("   ✅ Video processing completed successfully!")
+            
+            # Step 3: Publish ONLY after processing is FINISHED
+            print("   🚀 Publishing container...")
             media_id = self._publish_container(container_id)
             
             if not media_id:
-                return {'success': False, 'message': 'Failed to publish'}
+                return {'success': False, 'message': 'Failed to publish reel - Media ID not available'}
             
+            print(f"   ✅ Reel published successfully! Media ID: {media_id}")
             return {'success': True, 'media_id': media_id}
             
         except Exception as e:
-            return {'success': False, 'message': str(e)}
+            error_msg = f"Exception during reel publishing: {str(e)}"
+            print(f"   ❌ {error_msg}")
+            return {'success': False, 'message': error_msg}
     
     def _create_image_container(self, image_url: str, caption: str) -> Optional[str]:
         """Create image container"""
@@ -985,7 +997,7 @@ class InstagramPublisher:
             return None
     
     def _create_reel_container(self, video_url: str, caption: str) -> Optional[str]:
-        """Create reel container"""
+        """Create reel container - IMPROVED VERSION"""
         
         url = f"https://graph.facebook.com/v18.0/{self.IG_USER_ID}/media"
         
@@ -997,23 +1009,39 @@ class InstagramPublisher:
             'access_token': self.FB_ACCESS_TOKEN
         }
         
+        print(f"   📍 Container URL: {url}")
+        print(f"   🎬 Video URL: {video_url[:50]}...")
+        print(f"   📝 Caption: {caption[:100]}...")
+        
         try:
             response = requests.post(url, data=payload, timeout=30)
             result = response.json()
             
+            print(f"   📦 API Response: {result}")
+            
             if 'id' in result:
-                return result['id']
+                container_id = result['id']
+                print(f"   ✅ Container created: {container_id}")
+                return container_id
             else:
-                error = result.get('error', {}).get('message', 'Unknown')
-                print(f"   ❌ Container error: {error}")
+                error = result.get('error', {})
+                error_msg = error.get('message', 'Unknown')
+                error_code = error.get('code', 'N/A')
+                error_type = error.get('type', 'N/A')
+                
+                print(f"   ❌ Container creation failed:")
+                print(f"      Message: {error_msg}")
+                print(f"      Code: {error_code}")
+                print(f"      Type: {error_type}")
+                
                 return None
                 
         except Exception as e:
-            print(f"   ❌ Container error: {e}")
+            print(f"   ❌ Container creation exception: {e}")
             return None
     
-    def _wait_for_container_ready(self, container_id: str, max_wait: int = 60) -> bool:
-        """Wait for container processing"""
+    def _wait_for_container_ready(self, container_id: str, max_wait: int = 120) -> bool:
+        """Wait for container processing - FIXED VERSION"""
         
         url = f"https://graph.facebook.com/v18.0/{container_id}"
         params = {
@@ -1022,32 +1050,50 @@ class InstagramPublisher:
         }
         
         start_time = time.time()
+        check_count = 0
+        
+        print(f"   ⏳ Waiting for video processing to complete...")
+        print(f"   📍 Container ID: {container_id}")
         
         while time.time() - start_time < max_wait:
+            check_count += 1
+            
             try:
-                response = requests.get(url, params=params, timeout=10)
+                response = requests.get(url, params=params, timeout=15)
                 result = response.json()
+                
+                print(f"   📦 API Response: {result}")
                 
                 status = result.get('status_code')
                 
                 if status == 'FINISHED':
+                    print(f"   ✅ Video processing FINISHED after {check_count} checks ({int(time.time() - start_time)}s)")
                     return True
                 elif status == 'ERROR':
-                    print(f"   ❌ Processing error")
+                    print(f"   ❌ Processing ERROR detected")
+                    error_msg = result.get('error', {}).get('message', 'Unknown processing error')
+                    print(f"   ❌ Error details: {error_msg}")
                     return False
+                elif status in ['IN_PROGRESS', 'PROCESSING']:
+                    elapsed = int(time.time() - start_time)
+                    print(f"   ⏳ Status: {status} (check #{check_count}, {elapsed}s elapsed)")
+                else:
+                    print(f"   ⚠️  Unknown status: {status}")
                 
-                print(f"   ⏳ Status: {status}")
-                time.sleep(5)
+                # Wait longer between checks to avoid rate limiting
+                time.sleep(8)
                 
             except Exception as e:
                 print(f"   ⚠️  Status check error: {e}")
-                time.sleep(5)
+                time.sleep(8)
         
-        print(f"   ⏰ Timeout")
+        elapsed = int(time.time() - start_time)
+        print(f"   ⏰ TIMEOUT after {elapsed}s - Video processing did not complete")
+        print(f"   ❌ Last known status was not FINISHED")
         return False
     
     def _publish_container(self, container_id: str) -> Optional[str]:
-        """Publish container"""
+        """Publish container - IMPROVED VERSION"""
         
         url = f"https://graph.facebook.com/v18.0/{self.IG_USER_ID}/media_publish"
         
@@ -1056,19 +1102,39 @@ class InstagramPublisher:
             'access_token': self.FB_ACCESS_TOKEN
         }
         
+        print(f"   📍 Publish URL: {url}")
+        print(f"   🆔 Container ID: {container_id}")
+        
         try:
             response = requests.post(url, data=payload, timeout=30)
             result = response.json()
             
+            print(f"   📦 Publish Response: {result}")
+            
             if 'id' in result:
-                return result['id']
+                media_id = result['id']
+                print(f"   ✅ Successfully published! Media ID: {media_id}")
+                return media_id
             else:
-                error = result.get('error', {}).get('message', 'Unknown')
-                print(f"   ❌ Publish error: {error}")
+                error = result.get('error', {})
+                error_msg = error.get('message', 'Unknown')
+                error_code = error.get('code', 'N/A')
+                error_type = error.get('type', 'N/A')
+                
+                print(f"   ❌ Publish failed:")
+                print(f"      Message: {error_msg}")
+                print(f"      Code: {error_code}")
+                print(f"      Type: {error_type}")
+                
+                # Special handling for "Media ID is not available" error
+                if 'Media ID is not available' in error_msg or 'not available' in error_msg.lower():
+                    print(f"   🔍 This error usually means the video is still processing!")
+                    print(f"   💡 The container status should have been FINISHED before publishing")
+                
                 return None
                 
         except Exception as e:
-            print(f"   ❌ Publish error: {e}")
+            print(f"   ❌ Publish exception: {e}")
             return None
     
     def _add_comment(self, media_id: str, text: str):

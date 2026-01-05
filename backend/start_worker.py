@@ -32,6 +32,7 @@ from app.jobs.broadcast_job import generate_all_broadcasts  # ✅ تم التغ�
 from app.jobs.social_media_job import generate_social_media_content
 from app.jobs.social_media_image_job import generate_social_media_images
 from app.jobs.reel_generation_job import generate_reels
+from app.jobs.publishers_job import publish_to_social_media
 
 # Set SSL certificate environment variable
 os.environ["SSL_CERT_FILE"] = certifi.where()
@@ -84,6 +85,14 @@ TASKS = {
     'reel_generation': {
         'func': generate_reels,
         'interval': 2000,             
+    },
+    # ═══════════════════════════════════════════════════════════
+    # 📤 Publishers Job: نشر على جميع منصات السوشال ميديا
+    # Facebook + Instagram + Telegram
+    # ═══════════════════════════════════════════════════════════
+    'publishers': {
+        'func': publish_to_social_media,
+        'interval': 2400,             # 40 minutes
     }
 }
 
