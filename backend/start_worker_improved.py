@@ -15,7 +15,7 @@ Improvements:
 
 Flow:
 ┌─────────────────────────────────────────────────────────────┐
-│  Loop كل 10 دقائق:                                          │
+│  Loop كل 2 دقيقة:                                           │
 │                                                             │
 │  1. 📥 Scraping (parallel if multiple sources)             │
 │  2. 🔄 Processing: cluster → report → social (sequential)   │
@@ -124,15 +124,15 @@ def import_jobs():
 # ═══════════════════════════════════════════════════════════════
 
 # الفترة الأساسية بين الدورات (بالثواني)
-BASE_CYCLE_INTERVAL = 200  
+BASE_CYCLE_INTERVAL = int(os.getenv('CYCLE_INTERVAL', 120))  # 2 دقيقة default  
 
 # كل كم دورة يشتغل كل group
 CYCLE_CONFIG = {
-    'scraping': 1,           # كل دورة (كل 10 دق)
-    'processing': 1,         # كل دورة (كل 10 دق)
-    'media_generation': 2,   # كل دورتين (كل 20 دق)
-    'publishing': 3,         # كل 3 دورات (كل 30 دق)
-    'broadcast': 3,          # كل 3 دورات (كل 30 دق)
+    'scraping': 1,           # كل دورة (كل 2 دق)
+    'processing': 1,         # كل دورة (كل 2 دق)
+    'media_generation': 2,   # كل دورتين (كل 4 دق)
+    'publishing': 3,         # كل 3 دورات (كل 6 دق)
+    'broadcast': 3,          # كل 3 دورات (كل 6 دق)
 }
 
 # عدد الـ workers لكل group

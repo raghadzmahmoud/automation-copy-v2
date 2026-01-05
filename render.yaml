@@ -64,6 +64,44 @@ services:
       - key: SECRET_KEY
         sync: false
       
+      # ═══════════════════════════════════════════════════════════
+      # 🚀 Improved Worker Configuration
+      # ═══════════════════════════════════════════════════════════
+      - key: WORKER_TYPE
+        value: improved
+      - key: MAX_PARALLEL_JOBS
+        value: "4"
+      - key: DEFAULT_JOB_TIMEOUT
+        value: "300"
+      - key: ENABLE_JOB_TIMEOUTS
+        value: "true"
+      - key: ENABLE_PARALLEL_EXECUTION
+        value: "true"
+      - key: BROADCAST_MODE
+        value: "unified"
+      - key: CYCLE_INTERVAL
+        value: "120"
+      
+      # Job-specific timeouts (seconds)
+      - key: SCRAPING_TIMEOUT
+        value: "600"
+      - key: CLUSTERING_TIMEOUT
+        value: "180"
+      - key: REPORTS_TIMEOUT
+        value: "300"
+      - key: SOCIAL_MEDIA_TIMEOUT
+        value: "240"
+      - key: IMAGES_TIMEOUT
+        value: "900"
+      - key: AUDIO_TIMEOUT
+        value: "600"
+      - key: VIDEO_TIMEOUT
+        value: "1200"
+      - key: PUBLISHING_TIMEOUT
+        value: "400"
+      - key: BROADCAST_TIMEOUT
+        value: "1000"
+      
       # AWS S3
       - key: AWS_ACCESS_KEY_ID
         sync: false

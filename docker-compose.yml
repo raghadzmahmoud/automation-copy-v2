@@ -36,6 +36,7 @@ services:
       - ENABLE_JOB_TIMEOUTS=true
       - ENABLE_PARALLEL_EXECUTION=true
       - BROADCAST_MODE=unified
+      - CYCLE_INTERVAL=120
       
       # Job Timeouts (shorter for development)
       - SCRAPING_TIMEOUT=300
@@ -46,7 +47,7 @@ services:
       - AUDIO_TIMEOUT=300
       - VIDEO_TIMEOUT=600
       - PUBLISHING_TIMEOUT=180
-      - BROADCAST_TIMEOUT=120
+      - BROADCAST_TIMEOUT=600
       
       # API Keys (set these in .env file)
       - GEMINI_API_KEY=${GEMINI_API_KEY}

@@ -131,8 +131,8 @@ JOB_TIMEOUTS = {
     'images': lambda: get_env_timeout('IMAGES_TIMEOUT', 900),            # 15 دقيقة
     'audio': lambda: get_env_timeout('AUDIO_TIMEOUT', 600),              # 10 دقائق
     'video': lambda: get_env_timeout('VIDEO_TIMEOUT', 1200),             # 20 دقيقة
-    'publishing': lambda: get_env_timeout('PUBLISHING_TIMEOUT', 300),    # 5 دقائق
-    'broadcast': lambda: get_env_timeout('BROADCAST_TIMEOUT', 180),      # 3 دقائق
+    'publishing': lambda: get_env_timeout('PUBLISHING_TIMEOUT', 400),    # 5 دقائق
+    'broadcast': lambda: get_env_timeout('BROADCAST_TIMEOUT', 1000),      # 10 دقائق
     'default': lambda: get_env_timeout('DEFAULT_JOB_TIMEOUT', 300),      # 5 دقائق
 }
 
