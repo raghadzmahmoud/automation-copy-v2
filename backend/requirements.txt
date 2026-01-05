@@ -8,11 +8,12 @@ pydantic-settings==2.1.0
 python-multipart==0.0.6
 
 # ===============================
-# News Collection
+# News Collection / Scraping
 # ===============================
 feedparser==6.0.10
 requests==2.31.0
 urllib3==2.1.0
+beautifulsoup4==4.12.3
 
 # ===============================
 # AI / ML (Google)
@@ -37,7 +38,7 @@ psycopg2-binary==2.9.9
 # Scheduler
 # ===============================
 schedule==1.2.1
-apscheduler
+apscheduler==3.10.4
 
 # ===============================
 # AWS S3
@@ -47,20 +48,18 @@ boto3==1.34.0
 # ===============================
 # Media & Image Processing
 # ===============================
-Pillow
+Pillow==10.2.0
 moviepy==1.0.3
-ffmpeg-python
+ffmpeg-python==0.2.0
 
 # ===============================
 # Social Media & Automation
 # ===============================
-telethon
-playwright
+telethon==1.34.0
+playwright==1.41.2
 
 # ===============================
 # Arabic Text Support (RTL)
 # ===============================
-arabic-reshaper>=3.0.0
-python-bidi>=0.4.2
-
-beautifulsoup4
+arabic-reshaper==3.0.0
+python-bidi==0.4.2
