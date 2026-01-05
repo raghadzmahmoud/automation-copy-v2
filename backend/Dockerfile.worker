@@ -1,5 +1,5 @@
-# 🐳 Docker for Background Worker with Arabic Support
-# Optimized for Arabic text processing and reduced resource usage
+# 🎯 Docker for Media Worker Only
+# Images, Reels & Publishing with Arabic Support
 
 FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
 
@@ -38,33 +38,31 @@ RUN echo "📝 Checking installed fonts..." && \
     fc-list | grep -i noto | head -5 && \
     echo "✅ Font installation complete"
 
-# Set environment variables optimized for worker
+# Set environment variables for media worker
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV FONTCONFIG_PATH=/etc/fonts
 ENV FC_LANG=ar
 
-# Worker-specific optimizations
+# Media worker specific settings
+ENV WORKER_TYPE=media
 ENV CYCLE_INTERVAL=120
-ENV BROADCAST_TIMEOUT=600
-ENV MAX_PARALLEL_JOBS=3
-ENV JOB_TIMEOUT=300
 ENV REEL_BATCH_SIZE=4
+ENV IMAGE_BATCH_SIZE=4
 
 # Create necessary directories with proper permissions
 RUN mkdir -p /app/app/logs && \
     mkdir -p /app/fonts && \
     mkdir -p /app/temp && \
-    chmod -R 755 /app && \
-    chmod +x start_worker.py start_worker_improved.py
+    chmod -R 755 /app
 
 # Expose port (not really needed for worker, but good practice)
 EXPOSE 8000
 
-# Enhanced health check for worker
+# Health check for media worker
 HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
-    CMD python -c "import sys, os; sys.path.append('/app'); from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; import arabic_reshaper, bidi; print('✅ Worker health check passed')" || exit 1
+    CMD python -c "import arabic_reshaper, bidi; from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; print('✅ Media worker healthy')" || exit 1
 
-# Flexible worker startup based on WORKER_TYPE environment variable
-CMD ["sh", "-c", "if [ \"$WORKER_TYPE\" = \"media\" ]; then python test_media_worker.py --continuous; else python start_worker_improved.py; fi"]
+# Run the media worker only (Images, Reels, Publishing)
+CMD ["python", "test_media_worker.py", "--continuous"]
