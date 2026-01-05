@@ -6,7 +6,7 @@ services:
   - type: worker
     name: automation-worker
     env: docker
-    dockerfilePath: ./backend/Dockerfile.worker
+    dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend/
     
     # Environment variables (values to be set manually in Render Dashboard)
@@ -79,6 +79,12 @@ services:
       - key: PYTHONPATH
         value: "/app"
       - key: PYTHONUNBUFFERED
+        value: "1"
+      
+      # Playwright specific
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "/ms-playwright"
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
         value: "1"
     
     # Resource allocation

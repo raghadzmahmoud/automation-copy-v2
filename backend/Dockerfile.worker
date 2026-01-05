@@ -37,9 +37,15 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright and browsers
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# Install Playwright browsers with retry mechanism
+RUN python -m playwright install chromium || \
+    (sleep 10 && python -m playwright install chromium) || \
+    (sleep 20 && python -m playwright install chromium)
+
+# Install Playwright system dependencies with retry
+RUN python -m playwright install-deps chromium || \
+    (sleep 10 && python -m playwright install-deps chromium) || \
+    (sleep 20 && python -m playwright install-deps chromium)
 
 # Copy the entire backend code
 COPY . .
@@ -47,6 +53,7 @@ COPY . .
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Create logs directory
 RUN mkdir -p /app/app/logs
