@@ -1,100 +1,159 @@
-# 🚀 Render Configuration for Background Worker
-# Deploy start_worker.py as a background service
+# ═══════════════════════════════════════════════════════════════
+# 🚀 Render Configuration - Sequential Background Worker
+# ═══════════════════════════════════════════════════════════════
+# 
+# هذا الملف للـ Worker فقط
+# إذا عندك API منفصل، اعمله render.yaml ثاني أو أضفه هون
+#
+# ═══════════════════════════════════════════════════════════════
 
 services:
-  # Background Worker Service
+  # ═══════════════════════════════════════════════════════════
+  # 🔄 Background Worker Service (Sequential)
+  # ═══════════════════════════════════════════════════════════
   - type: worker
     name: automation-worker
-    env: docker
-    dockerfilePath: ./Dockerfile
+    runtime: docker
+    
+    # ⚠️ مهم: استخدم Dockerfile.worker مش Dockerfile
+    dockerfilePath: ./Dockerfile.worker
     dockerContext: ./
     
-    # Environment variables (values to be set manually in Render Dashboard)
+    # ═══════════════════════════════════════════════════════════
+    # 💰 Plan Selection
+    # ═══════════════════════════════════════════════════════════
+    # starter  = $7/mo  (512MB RAM) - ❌ قليل
+    # standard = $25/mo (2GB RAM)   - ✅ مناسب
+    # pro      = $85/mo (4GB RAM)   - للمشاريع الكبيرة
+    # ═══════════════════════════════════════════════════════════
+    plan: standard
+    
+    # Region - اختار الأقرب لقاعدة البيانات
+    # قاعدة بياناتك في Oregon، فاختار Oregon
+    region: oregon
+    
+    # Instance count - للـ worker دايماً 1
+    numInstances: 1
+    
+    # Auto-deploy when pushing to main/master
+    autoDeploy: true
+    
+    # ═══════════════════════════════════════════════════════════
+    # 🔐 Environment Variables
+    # ═══════════════════════════════════════════════════════════
     envVars:
-      # Database (PostgreSQL - Render Hosted)
+      # ─────────────────────────────────────────────────────────
+      # Database (PostgreSQL)
+      # ─────────────────────────────────────────────────────────
       - key: DB_NAME
-        sync: false
+        value: automation_db_mbly
       - key: DB_USER
-        sync: false
+        value: automation_db_mbly_user
       - key: DB_PASSWORD
-        sync: false
+        sync: false  # ← حطها من Dashboard لأنها sensitive
       - key: DB_HOST
         sync: false
       - key: DB_PORT
         value: "5432"
       
+      # ─────────────────────────────────────────────────────────
       # Gemini AI
+      # ─────────────────────────────────────────────────────────
       - key: GEMINI_API_KEY
-        sync: false
+        sync: false  # ← حطها من Dashboard
       - key: GEMINI_MODEL
-        value: "gemini-2.5-flash"
+        value: gemini-2.5-flash
       - key: GEMINI_IMAGE_MODEL
-        value: "gemini-2.5-flash-image"
+        value: gemini-2.5-flash-image
       - key: GEMINI_EXTRACTION_MODEL
-        value: "gemini-2.5-flash-lite"
+        value: gemini-2.5-flash-lite
       
-      # Application
+      # ─────────────────────────────────────────────────────────
+      # Application Settings
+      # ─────────────────────────────────────────────────────────
       - key: ENVIRONMENT
-        value: "production"
+        value: production
       - key: DEBUG
         value: "False"
       - key: LOG_LEVEL
-        value: "INFO"
+        value: INFO
       - key: SECRET_KEY
-        sync: false
+        sync: false  # ← حطها من Dashboard
       
-      # AWS Configuration (for S3 Image Storage)
+      # ─────────────────────────────────────────────────────────
+      # AWS S3
+      # ─────────────────────────────────────────────────────────
       - key: AWS_ACCESS_KEY_ID
-        sync: false
+        sync: false  # ← حطها من Dashboard
       - key: AWS_SECRET_ACCESS_KEY
-        sync: false
+        sync: false  # ← حطها من Dashboard
       - key: AWS_DEFAULT_REGION
-        value: "us-east-1"
-      
-      # S3 Bucket Settings
+        value: us-east-1
       - key: S3_BUCKET_NAME
-        sync: false
+        value: media-automation-bucket
       
-      # S3 Folder Structure
+      # S3 Folders
       - key: S3_ORIGINAL_IMAGES_FOLDER
-        value: "original/images/"
+        value: original/images/
       - key: S3_ORIGINAL_VIDEOS_FOLDER
-        value: "original/videos/"
+        value: original/videos/
       - key: S3_ORIGINAL_AUDIOS_FOLDER
-        value: "original/audios/"
+        value: original/audios/
       - key: S3_GENERATED_IMAGES_FOLDER
-        value: "generated/images/"
+        value: generated/images/
       - key: S3_GENERATED_AUDIOS_FOLDER
-        value: "generated/audios/"
+        value: generated/audios/
       - key: S3_GENERATED_VIDEOS_FOLDER
-        value: "generated/videos/"
+        value: generated/videos/
       
-      # Google Cloud (for TTS/STT)
+      # ─────────────────────────────────────────────────────────
+      # Google Cloud (TTS)
+      # ─────────────────────────────────────────────────────────
       - key: GOOGLE_APPLICATION_CREDENTIALS
-        sync: false
+        value: ./n8nraghad-7fc0064b9857.json
       - key: GOOGLE_CREDENTIALS_JSON
+        sync: false  # ← حطها من Dashboard (الـ JSON كامل)
+      
+      # ─────────────────────────────────────────────────────────
+      # Facebook Publisher
+      # ─────────────────────────────────────────────────────────
+      - key: FB_GAZA_ACCESS_TOKEN
+        sync: false
+      - key: FB_GAZA_PAGE_ID
+        value: "893918783798150"
+      - key: FB_DOT_ACCESS_TOKEN
+        sync: false
+      - key: FB_DOT_PAGE_ID
+        value: "847928151740253"
+      
+      # ─────────────────────────────────────────────────────────
+      # Instagram Publisher
+      # ─────────────────────────────────────────────────────────
+      - key: IG_GAZA_USER_ID
+        value: "17841477381900896"
+      - key: FB_gaza_ACCESS_TOKEN
         sync: false
       
-      # Docker/Python specific
+      # ─────────────────────────────────────────────────────────
+      # Telegram Publisher
+      # ─────────────────────────────────────────────────────────
+      - key: TG_BOT_TOKEN
+        sync: false
+      - key: TG_CHAT_ID
+        value: "-1003517881817"
+      
+      # ─────────────────────────────────────────────────────────
+      # API Base URL
+      # ─────────────────────────────────────────────────────────
+      - key: API_BASE_URL
+        value: https://news-api-ydc8.onrender.com
+      
+      # ─────────────────────────────────────────────────────────
+      # Python/Docker Settings
+      # ─────────────────────────────────────────────────────────
       - key: PYTHONPATH
-        value: "/app"
+        value: /app
       - key: PYTHONUNBUFFERED
         value: "1"
-      
-      # Playwright specific
       - key: PLAYWRIGHT_BROWSERS_PATH
-        value: "/ms-playwright"
-      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
-        value: "1"
-    
-    # Resource allocation
-    plan: starter  # or standard/pro based on your needs
-    
-    # Auto-deploy settings
-    autoDeploy: true
-    
-    # Build settings
-    buildCommand: echo "Using Docker build"
-    
-    # Scaling (for worker, usually 1)
-    numInstances: 1
+        value: /ms-playwright
