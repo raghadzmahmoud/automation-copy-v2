@@ -103,7 +103,7 @@ class ReelGenerator:
         
         # Initialize Google Text-to-Speech for temporary audio generation
         try:
-            credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON') # delete this line
+            credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
             credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
             
             if credentials_json:
@@ -118,19 +118,19 @@ class ReelGenerator:
                 self.tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
                 print(f"✅ Google TTS client initialized (from JSON env var)")
                 
-            elif credentials_path: #and os.path.exists(credentials_path):
+            elif credentials_path and os.path.exists(credentials_path):
                 self.tts_client = texttospeech.TextToSpeechClient()
                 print(f"✅ Google TTS client initialized (from file)")
                 print(f"   🔑 Using credentials: {credentials_path}")
             else:
                 print("❌ Google credentials not found!")
-                self.tts_client = texttospeech.TextToSpeechClient()
                 print("   Set one of:")
                 print("   - GOOGLE_CREDENTIALS_JSON (for production)")
                 print("   - GOOGLE_APPLICATION_CREDENTIALS (for local development)")
+                raise ValueError("Google credentials not found")
         except Exception as e:
             print(f"⚠️  Google TTS initialization failed: {e}")
-            self.tts_client = None
+            raise
     
     def _get_news_images_for_report(self, report_id: int) -> List[str]:
         """Get all image URLs from news articles in the report's cluster"""
@@ -734,7 +734,7 @@ class ReelGenerator:
         """Fetch reports that have images and audio but no reels"""
         try:
             query = """
-                SELECT DISTINCT gr.id, gr.title, gr.updated_at
+                SELECT DISTINCT gr.id, gr.title, gr.updated_at, gr.created_at
                 FROM generated_report gr
                 WHERE gr.status = 'draft'
                     AND EXISTS (
@@ -950,8 +950,21 @@ class ReelGenerator:
         try:
             from google.cloud import speech
             
-            # Initialize Speech client
-            speech_client = speech.SpeechClient()
+            # Initialize Speech client with same credentials as TTS
+            credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+            if credentials_json:
+                import json
+                from google.oauth2 import service_account
+                
+                credentials_dict = json.loads(credentials_json)
+                credentials = service_account.Credentials.from_service_account_info(
+                    credentials_dict,
+                    scopes=['https://www.googleapis.com/auth/cloud-platform']
+                )
+                speech_client = speech.SpeechClient(credentials=credentials)
+            else:
+                # Fallback to default credentials
+                speech_client = speech.SpeechClient()
             
             # Read audio file
             with open(audio_path, 'rb') as audio_file:
