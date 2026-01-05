@@ -1,0 +1,143 @@
+# 🐳 Docker Compose for Local Development
+# ═══════════════════════════════════════════════════════════════
+# يشغل الـ worker المحسن محلياً للتطوير والاختبار
+# ═══════════════════════════════════════════════════════════════
+
+version: '3.8'
+
+services:
+  # ═══════════════════════════════════════════════════════════
+  # 🔄 Improved Worker Service
+  # ═══════════════════════════════════════════════════════════
+  worker-improved:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: automation-worker-improved
+    
+    # Environment variables for local development
+    environment:
+      # Database (use your local/test DB)
+      - DB_NAME=${DB_NAME:-automation_db}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${DB_PORT:-5432}
+      
+      # Application
+      - ENVIRONMENT=development
+      - DEBUG=True
+      - LOG_LEVEL=DEBUG
+      
+      # Worker Configuration
+      - WORKER_TYPE=improved
+      - MAX_PARALLEL_JOBS=2
+      - DEFAULT_JOB_TIMEOUT=300
+      - ENABLE_JOB_TIMEOUTS=true
+      - ENABLE_PARALLEL_EXECUTION=true
+      - BROADCAST_MODE=unified
+      
+      # Job Timeouts (shorter for development)
+      - SCRAPING_TIMEOUT=300
+      - CLUSTERING_TIMEOUT=120
+      - REPORTS_TIMEOUT=180
+      - SOCIAL_MEDIA_TIMEOUT=120
+      - IMAGES_TIMEOUT=600
+      - AUDIO_TIMEOUT=300
+      - VIDEO_TIMEOUT=600
+      - PUBLISHING_TIMEOUT=180
+      - BROADCAST_TIMEOUT=120
+      
+      # API Keys (set these in .env file)
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - FB_GAZA_ACCESS_TOKEN=${FB_GAZA_ACCESS_TOKEN}
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      
+      # Python
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    
+    # Mount code for development (hot reload)
+    volumes:
+      - ./backend:/app
+      - worker-logs:/app/logs
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "print('Worker health check')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Network
+    networks:
+      - automation-network
+
+  # ═══════════════════════════════════════════════════════════
+  # 📊 Optional: PostgreSQL for local development
+  # ═══════════════════════════════════════════════════════════
+  postgres:
+    image: postgres:15-alpine
+    container_name: automation-postgres
+    
+    environment:
+      - POSTGRES_DB=automation_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    
+    ports:
+      - "5432:5432"
+    
+    networks:
+      - automation-network
+    
+    # Only start if explicitly requested
+    profiles:
+      - with-db
+
+  # ═══════════════════════════════════════════════════════════
+  # 📈 Optional: Redis for job queue (future feature)
+  # ═══════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: automation-redis
+    
+    volumes:
+      - redis-data:/data
+    
+    ports:
+      - "6379:6379"
+    
+    networks:
+      - automation-network
+    
+    # Only start if explicitly requested
+    profiles:
+      - with-redis
+
+# ═══════════════════════════════════════════════════════════════
+# Volumes
+# ═══════════════════════════════════════════════════════════════
+volumes:
+  worker-logs:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+
+# ═══════════════════════════════════════════════════════════════
+# Networks
+# ═══════════════════════════════════════════════════════════════
+networks:
+  automation-network:
+    driver: bridge
