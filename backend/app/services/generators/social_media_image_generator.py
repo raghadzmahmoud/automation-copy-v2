@@ -557,10 +557,17 @@ class SocialImageGenerator:
             
             # معالجة النص العربي بالترتيب الصحيح
             try:
-                # إعادة تشكيل النص العربي أولاً
-                reshaped = arabic_reshaper.reshape(test)
-                # ثم تطبيق خوارزمية BiDi للاتجاه الصحيح
-                bidi_text = get_display(reshaped)
+                # تحقق إذا النص يحتوي على عربي
+                has_arabic = any('\u0600' <= char <= '\u06FF' for char in test)
+                
+                if has_arabic:
+                    # إعادة تشكيل النص العربي أولاً
+                    reshaped = arabic_reshaper.reshape(test)
+                    # ثم تطبيق خوارزمية BiDi للاتجاه الصحيح
+                    bidi_text = get_display(reshaped)
+                else:
+                    # نص إنجليزي - لا يحتاج معالجة
+                    bidi_text = test
                 
                 # قياس عرض النص
                 bbox = temp.textbbox((0, 0), bidi_text, font=font)
@@ -588,17 +595,31 @@ class SocialImageGenerator:
             lines_raw = lines_raw[:3]
             lines_raw[2] += '...'
         
-        # معالجة كل سطر للعربية
+        # معالجة كل سطر للعربية بشكل محسن
         lines = []
         for line_text in lines_raw:
             try:
-                # إعادة تشكيل النص العربي
-                reshaped = arabic_reshaper.reshape(line_text)
-                # تطبيق خوارزمية BiDi للاتجاه الصحيح (RTL)
-                bidi_line = get_display(reshaped)
-                lines.append(bidi_line)
+                # تنظيف النص أولاً
+                clean_text = line_text.strip()
+                
+                # تحقق إذا النص يحتوي على عربي
+                has_arabic = any('\u0600' <= char <= '\u06FF' for char in clean_text)
+                
+                if has_arabic:
+                    # معالجة النص العربي بالطريقة الصحيحة
+                    # إعادة تشكيل النص العربي (ربط الحروف)
+                    reshaped = arabic_reshaper.reshape(clean_text)
+                    # تطبيق خوارزمية BiDi للاتجاه الصحيح (RTL)
+                    bidi_line = get_display(reshaped)
+                    lines.append(bidi_line)
+                    print(f"   ✅ Arabic processed: '{clean_text}' → '{bidi_line}'")
+                else:
+                    # نص إنجليزي - لا يحتاج معالجة
+                    lines.append(clean_text)
+                    print(f"   ✅ English text: '{clean_text}'")
+                    
             except Exception as e:
-                print(f"   ⚠️  Arabic line processing error: {e}")
+                print(f"   ⚠️  Arabic line processing error for '{line_text}': {e}")
                 # fallback للنص العادي
                 lines.append(line_text)
         

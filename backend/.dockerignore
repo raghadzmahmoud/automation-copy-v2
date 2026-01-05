@@ -59,8 +59,9 @@ test_*.py
 *_test.py
 tests/
 
-# Exception: Keep media worker
+# Exception: Keep media worker and Arabic test
 !test_media_worker.py
+!test_arabic_direction.py
 
 # Development files
 .env.example

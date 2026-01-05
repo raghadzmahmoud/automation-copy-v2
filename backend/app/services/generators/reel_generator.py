@@ -1119,6 +1119,7 @@ class ReelGenerator:
             from moviepy.editor import ImageClip
             from PIL import Image, ImageDraw, ImageFont
             import textwrap
+            import tempfile
             
             # Create a transparent image for text with semi-transparent background
             img = Image.new('RGBA', (self.REEL_WIDTH, 400), (0, 0, 0, 0))
