@@ -4,10 +4,10 @@
 
 services:
   # ═══════════════════════════════════════════════════════════
-  # 🔄 Background Worker Service (Sequential)
+  # 🎯 Media Worker Service (Images, Reels, Publishing)
   # ═══════════════════════════════════════════════════════════
   - type: worker
-    name: automation-worker
+    name: media-automation-worker
     
     # ⚠️ مهم: env مش runtime
     env: docker
@@ -65,12 +65,12 @@ services:
         sync: false
       
       # ═══════════════════════════════════════════════════════════
-      # 🚀 Improved Worker Configuration
+      # 🎯 Media Worker Configuration (Images, Reels, Publishing)
       # ═══════════════════════════════════════════════════════════
       - key: WORKER_TYPE
-        value: improved
+        value: media
       - key: MAX_PARALLEL_JOBS
-        value: "4"
+        value: "3"
       - key: DEFAULT_JOB_TIMEOUT
         value: "300"
       - key: ENABLE_JOB_TIMEOUTS
@@ -81,8 +81,18 @@ services:
         value: "unified"
       - key: CYCLE_INTERVAL
         value: "120"
+      - key: REEL_BATCH_SIZE
+        value: "4"
+      - key: IMAGE_BATCH_SIZE
+        value: "4"
       
-      # Job-specific timeouts (seconds)
+      # Font and Arabic support
+      - key: FONTCONFIG_PATH
+        value: /etc/fonts
+      - key: FC_LANG
+        value: ar
+      
+      # Job-specific timeouts (optimized for Arabic processing)
       - key: SCRAPING_TIMEOUT
         value: "600"
       - key: CLUSTERING_TIMEOUT
@@ -90,17 +100,17 @@ services:
       - key: REPORTS_TIMEOUT
         value: "300"
       - key: SOCIAL_MEDIA_TIMEOUT
-        value: "240"
+        value: "300"
       - key: IMAGES_TIMEOUT
-        value: "900"
+        value: "600"
       - key: AUDIO_TIMEOUT
         value: "600"
       - key: VIDEO_TIMEOUT
-        value: "1200"
+        value: "900"
       - key: PUBLISHING_TIMEOUT
-        value: "400"
+        value: "300"
       - key: BROADCAST_TIMEOUT
-        value: "1000"
+        value: "600"
       
       # AWS S3
       - key: AWS_ACCESS_KEY_ID

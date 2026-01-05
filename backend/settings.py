@@ -12,7 +12,7 @@ DB_CONFIG = {
     'password': os.getenv('DB_PASSWORD'),
     'host': os.getenv('DB_HOST'),
     'port': int(os.getenv('DB_PORT', 5432)),
-    'options': '-c client_encoding=utf8',
+    'options': '-c client_encoding=utf8 -c standard_conforming_strings=on',
     'client_encoding': 'utf8'
 }
 

@@ -1124,139 +1124,271 @@ class ReelGenerator:
             img = Image.new('RGBA', (self.REEL_WIDTH, 400), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
             
-            # Load bundled Arabic font (works on all platforms)
+            # Load enhanced Arabic font with better fallback chain
             font = None
-            font_size = 60
+            font_size = 55  # Slightly smaller for better mobile readability
             
-            # First, try to use the bundled font from the project
+            # Enhanced font loading optimized for Render deployment
+            font = None
+            font_size = 55  # Optimized for mobile readability
+            
+            # Priority 1: Try bundled font (works best on Render)
             try:
-                # Get the backend directory (4 levels up from this file)
-                current_file = os.path.abspath(__file__)
-                backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
-                bundled_font_path = os.path.join(backend_dir, 'fonts', 'NotoSansArabic-Regular.ttf')
+                # Multiple possible paths for the bundled font
+                possible_paths = [
+                    # Relative to current working directory (Render deployment)
+                    'fonts/NotoSansArabic-Regular.ttf',
+                    './fonts/NotoSansArabic-Regular.ttf',
+                    # Relative to backend directory
+                    'backend/fonts/NotoSansArabic-Regular.ttf',
+                    './backend/fonts/NotoSansArabic-Regular.ttf',
+                    # Absolute path calculation (fallback)
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'fonts', 'NotoSansArabic-Regular.ttf')
+                ]
                 
-                if os.path.exists(bundled_font_path):
-                    try:
-                        font = ImageFont.truetype(bundled_font_path, font_size)
-                        print(f"   ✅ Using bundled Arabic font: {bundled_font_path}")
-                    except Exception as e:
-                        print(f"   ⚠️  Failed to load bundled font: {e}")
+                for font_path in possible_paths:
+                    if os.path.exists(font_path):
+                        try:
+                            font = ImageFont.truetype(font_path, font_size)
+                            print(f"   ✅ Using bundled Arabic font: {font_path}")
+                            break
+                        except Exception as e:
+                            print(f"   ⚠️  Failed to load {font_path}: {e}")
+                            continue
+                
             except Exception as e:
                 print(f"   ⚠️  Error finding bundled font: {e}")
             
-            # Fallback: Try system fonts if bundled font not available
+            # Priority 2: System fonts (Linux containers on Render)
             if not font:
                 try:
-                    import platform
-                    system = platform.system()
+                    # Render uses Linux containers, so focus on Linux fonts
+                    linux_font_paths = [
+                        # Common Arabic fonts on Linux
+                        '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf',
+                        '/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf',
+                        '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+                        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+                        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                        '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+                        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+                        # Ubuntu/Debian specific
+                        '/usr/share/fonts/truetype/ubuntu/Ubuntu-Bold.ttf',
+                        '/usr/share/fonts/truetype/ubuntu/Ubuntu-Regular.ttf',
+                    ]
                     
-                    if system == 'Linux':
-                        font_paths = [
-                            '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf',
-                            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-                            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-                        ]
-                    elif system == 'Darwin':  # macOS
-                        font_paths = [
-                            '/System/Library/Fonts/Supplemental/Arial.ttf',
-                            '/Library/Fonts/Arial.ttf',
-                        ]
-                    else:  # Windows
-                        font_paths = []
-                    
-                    for font_path in font_paths:
+                    for font_path in linux_font_paths:
                         if os.path.exists(font_path):
                             try:
                                 font = ImageFont.truetype(font_path, font_size)
-                                print(f"   ✅ Using system font: {font_path}")
+                                print(f"   ✅ Using system font: {os.path.basename(font_path)}")
                                 break
-                            except:
+                            except Exception as e:
+                                print(f"   ⚠️  Failed to load {font_path}: {e}")
                                 continue
-                except:
-                    pass
+                                
+                except Exception as e:
+                    print(f"   ⚠️  Error loading system fonts: {e}")
             
-            # Last resort: use default font (may not support Arabic)
+            # Priority 3: Install Noto fonts if not available (Render-specific)
+            if not font:
+                try:
+                    print(f"   🔄 Attempting to install Noto Arabic fonts for Render...")
+                    import subprocess
+                    
+                    # Try to install fonts using apt (works on Render's Ubuntu containers)
+                    try:
+                        subprocess.run(['apt-get', 'update'], check=False, capture_output=True)
+                        subprocess.run(['apt-get', 'install', '-y', 'fonts-noto'], check=False, capture_output=True)
+                        print(f"   ✅ Attempted to install Noto fonts")
+                        
+                        # Try loading again after installation
+                        noto_path = '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf'
+                        if os.path.exists(noto_path):
+                            font = ImageFont.truetype(noto_path, font_size)
+                            print(f"   ✅ Successfully loaded installed Noto font")
+                    except Exception as e:
+                        print(f"   ⚠️  Font installation failed: {e}")
+                        
+                except Exception as e:
+                    print(f"   ⚠️  Could not attempt font installation: {e}")
+            
+            # Priority 4: Download font if needed (Render fallback)
+            if not font:
+                try:
+                    print(f"   🌐 Downloading Arabic font for Render deployment...")
+                    import requests
+                    import tempfile
+                    
+                    # Download Noto Sans Arabic from Google Fonts
+                    font_url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf"
+                    
+                    response = requests.get(font_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    # Save to temporary file
+                    temp_font_path = tempfile.mktemp(suffix='.ttf')
+                    with open(temp_font_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    font = ImageFont.truetype(temp_font_path, font_size)
+                    print(f"   ✅ Downloaded and loaded Arabic font from Google Fonts")
+                    
+                except Exception as e:
+                    print(f"   ⚠️  Font download failed: {e}")
+            
+            # Last resort: Default font with warning
             if not font:
                 try:
                     font = ImageFont.load_default()
-                    print(f"   ⚠️  Using default font (Arabic may not render correctly)")
-                except:
+                    print(f"   ⚠️  Using default font - Arabic text may not render correctly on Render")
+                    print(f"   💡 Consider adding fonts to your Render deployment")
+                except Exception as e:
+                    print(f"   ❌ No font available at all: {e}")
                     font = None
-                    print(f"   ❌ No font available - text may not render")
             
-            # Process Arabic text FIRST, then wrap manually
-            # This is critical for RTL languages like Arabic
+            # Enhanced Arabic text processing optimized for Render deployment
             try:
-                import arabic_reshaper
-                from bidi.algorithm import get_display
+                # Check if Arabic libraries are available
+                try:
+                    import arabic_reshaper
+                    from bidi.algorithm import get_display
+                    arabic_support = True
+                    print(f"   ✅ Arabic text processing libraries available")
+                except ImportError as e:
+                    print(f"   ⚠️  Arabic libraries not available: {e}")
+                    print(f"   💡 Falling back to basic text processing")
+                    arabic_support = False
                 
-                # Create a reshaper instance for Arabic text
-                # This ensures letters are connected properly (cursive/joined form)
-                reshaper = arabic_reshaper.ArabicReshaper()
+                # Clean and prepare text
+                text = text.strip()
                 
-                # Split text into words first (preserving Arabic word boundaries)
-                words = text.split()
-                
-                # Manually wrap text by grouping words into lines
-                max_words_per_line = 5  # Adjust based on typical Arabic word length
-                lines = []
-                current_line = []
-                
-                for word in words:
-                    current_line.append(word)
-                    if len(current_line) >= max_words_per_line:
-                        lines.append(' '.join(current_line))
+                if arabic_support:
+                    # Enhanced Arabic processing for Render
+                    # Split text into sentences first (better for Arabic)
+                    import re
+                    sentences = re.split(r'[.!؟]\s+', text)
+                    sentences = [s.strip() for s in sentences if s.strip()]
+                    
+                    if not sentences:
+                        sentences = [text]  # fallback to original text
+                    
+                    # Process each sentence separately for better RTL handling
+                    processed_lines = []
+                    
+                    for sentence in sentences:
+                        # Split sentence into words
+                        words = sentence.split()
+                        
+                        # Group words into lines (3-4 words per line for Render mobile optimization)
+                        max_words_per_line = 3  # Reduced for better mobile readability on Render
                         current_line = []
+                        
+                        for word in words:
+                            current_line.append(word)
+                            if len(current_line) >= max_words_per_line:
+                                line_text = ' '.join(current_line)
+                                
+                                # Apply Arabic reshaping and BiDi to each line
+                                try:
+                                    # Use more robust Arabic processing
+                                    reshaped_line = arabic_reshaper.reshape(line_text)
+                                    rtl_line = get_display(reshaped_line)
+                                    processed_lines.append(rtl_line)
+                                except Exception as e:
+                                    print(f"   ⚠️  Arabic processing failed for line '{line_text}': {e}")
+                                    # Fallback: use original text
+                                    processed_lines.append(line_text)
+                                
+                                current_line = []
+                        
+                        # Add remaining words in the sentence
+                        if current_line:
+                            line_text = ' '.join(current_line)
+                            try:
+                                reshaped_line = arabic_reshaper.reshape(line_text)
+                                rtl_line = get_display(reshaped_line)
+                                processed_lines.append(rtl_line)
+                            except Exception as e:
+                                print(f"   ⚠️  Arabic processing failed for final line '{line_text}': {e}")
+                                processed_lines.append(line_text)
+                    
+                    lines = processed_lines
+                    print(f"   ✅ Processed {len(lines)} lines with Arabic RTL support (Render optimized)")
+                    
+                else:
+                    # Fallback processing for when Arabic libraries aren't available
+                    print(f"   🔄 Using fallback text processing (no Arabic libraries)")
+                    
+                    # Simple word-based wrapping
+                    words = text.split()
+                    lines = []
+                    current_line = []
+                    max_words_per_line = 3  # Conservative for mobile
+                    
+                    for word in words:
+                        current_line.append(word)
+                        if len(current_line) >= max_words_per_line:
+                            lines.append(' '.join(current_line))
+                            current_line = []
+                    
+                    if current_line:
+                        lines.append(' '.join(current_line))
+                    
+                    print(f"   ⚠️  Processed {len(lines)} lines without Arabic support")
                 
-                # Add remaining words
-                if current_line:
-                    lines.append(' '.join(current_line))
-                
-                # Now apply Arabic reshaping and RTL to each line
-                processed_lines = []
-                for line in lines:
-                    # Reshape Arabic text (connects letters properly in their joined forms)
-                    reshaped_line = reshaper.reshape(line)
-                    # Apply bidirectional algorithm for RTL display
-                    rtl_line = get_display(reshaped_line)
-                    processed_lines.append(rtl_line)
-                
-                lines = processed_lines
-                print(f"   ✅ Processed {len(lines)} lines with arabic-reshaper (RTL + connected letters)")
-                
-            except ImportError:
-                print(f"   ⚠️  arabic-reshaper not available - Arabic text may not render correctly")
-                print(f"   ⚠️  Install: pip install arabic-reshaper python-bidi")
-                # Fallback: use textwrap for English text
-                max_chars = 30
-                lines = textwrap.wrap(text, width=max_chars)
             except Exception as e:
-                print(f"   ⚠️  Error processing Arabic text: {e}")
+                print(f"   ❌ Error in text processing: {e}")
                 import traceback
                 traceback.print_exc()
-                # Fallback: use textwrap for English text
-                max_chars = 30
+                
+                # Ultimate fallback: simple character-based wrapping
+                print(f"   🔄 Using ultimate fallback: character-based wrapping")
+                import textwrap
+                max_chars = 20  # Very conservative for Render mobile
                 lines = textwrap.wrap(text, width=max_chars)
+                
+                if not lines:
+                    lines = [text]  # Ensure we have at least one line
             
-            # Limit to 4 lines max
-            if len(lines) > 4:
-                lines = lines[:4]
+            # Limit to 3 lines max for better mobile readability
+            if len(lines) > 3:
+                lines = lines[:3]
+                # Add ellipsis to the last line if text was truncated
+                if lines:
+                    lines[-1] = lines[-1] + "..."
             
             # Calculate text position (centered vertically in the image)
-            line_height = 80
+            line_height = 75  # Slightly reduced for better spacing
             total_height = len(lines) * line_height
             y_start = (400 - total_height) // 2
             
-            # Draw semi-transparent background rectangle for better readability
-            bg_padding = 30
+            # Draw enhanced semi-transparent background for better readability
+            bg_padding = 25
             bg_y = y_start - bg_padding
             bg_height = total_height + (bg_padding * 2)
-            draw.rectangle(
-                [(50, bg_y), (self.REEL_WIDTH - 50, bg_y + bg_height)],
-                fill=(0, 0, 0, 200)  # Semi-transparent black background
+            
+            # Rounded rectangle background
+            from PIL import ImageDraw
+            def draw_rounded_rectangle(draw, coords, radius, fill):
+                """Draw a rounded rectangle"""
+                x1, y1, x2, y2 = coords
+                draw.rectangle([x1 + radius, y1, x2 - radius, y2], fill=fill)
+                draw.rectangle([x1, y1 + radius, x2, y2 - radius], fill=fill)
+                draw.ellipse([x1, y1, x1 + radius * 2, y1 + radius * 2], fill=fill)
+                draw.ellipse([x2 - radius * 2, y1, x2, y1 + radius * 2], fill=fill)
+                draw.ellipse([x1, y2 - radius * 2, x1 + radius * 2, y2], fill=fill)
+                draw.ellipse([x2 - radius * 2, y2 - radius * 2, x2, y2], fill=fill)
+            
+            # Draw rounded background
+            draw_rounded_rectangle(
+                draw,
+                [40, bg_y, self.REEL_WIDTH - 40, bg_y + bg_height],
+                15,  # radius
+                (0, 0, 0, 180)  # Semi-transparent black
             )
             
-            # Draw text with outline (stroke) for better visibility
+            # Draw text with enhanced outline for better visibility
             for i, line in enumerate(lines):
                 y_pos = y_start + (i * line_height)
                 
@@ -1267,12 +1399,10 @@ class ReelGenerator:
                         bbox = draw.textbbox((0, 0), line, font=font)
                         text_width = bbox[2] - bbox[0]
                         text_height = bbox[3] - bbox[1]
-                    except:
+                    except AttributeError:
                         try:
                             # Fallback for older PIL versions
-                            bbox = draw.textsize(line, font=font)
-                            text_width = bbox[0]
-                            text_height = bbox[1]
+                            text_width, text_height = draw.textsize(line, font=font)
                         except:
                             # Ultimate fallback
                             text_width = len(line) * (font_size // 2)
@@ -1284,9 +1414,10 @@ class ReelGenerator:
                 # Center horizontally
                 x_pos = (self.REEL_WIDTH - text_width) // 2
                 
-                # Draw stroke (outline) - draw text multiple times with offset
-                for adj_x in range(-3, 4):
-                    for adj_y in range(-3, 4):
+                # Draw enhanced stroke (outline) for better visibility
+                stroke_width = 2
+                for adj_x in range(-stroke_width, stroke_width + 1):
+                    for adj_y in range(-stroke_width, stroke_width + 1):
                         if adj_x != 0 or adj_y != 0:
                             try:
                                 if font:
@@ -1305,7 +1436,7 @@ class ReelGenerator:
                             except Exception as e:
                                 pass
                 
-                # Draw main text
+                # Draw main text with white color
                 try:
                     if font:
                         draw.text(
@@ -1321,6 +1452,9 @@ class ReelGenerator:
                             line,
                             fill=(255, 255, 255, 255),  # White text
                         )
+                    
+                    print(f"   📝 Drew line {i+1}: '{line[:30]}{'...' if len(line) > 30 else ''}' at ({x_pos}, {y_pos})")
+                    
                 except Exception as e:
                     print(f"   ❌ Error drawing text line {i+1}: {e}")
                     import traceback

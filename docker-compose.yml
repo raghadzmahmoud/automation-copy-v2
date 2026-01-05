@@ -29,14 +29,15 @@ services:
       - DEBUG=True
       - LOG_LEVEL=DEBUG
       
-      # Worker Configuration
+      # Worker Configuration (Enhanced)
       - WORKER_TYPE=improved
-      - MAX_PARALLEL_JOBS=2
+      - MAX_PARALLEL_JOBS=3
       - DEFAULT_JOB_TIMEOUT=300
       - ENABLE_JOB_TIMEOUTS=true
       - ENABLE_PARALLEL_EXECUTION=true
       - BROADCAST_MODE=unified
       - CYCLE_INTERVAL=120
+      - REEL_BATCH_SIZE=4
       
       # Job Timeouts (shorter for development)
       - SCRAPING_TIMEOUT=300

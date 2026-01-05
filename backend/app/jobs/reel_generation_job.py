@@ -107,11 +107,11 @@ def generate_reels(report_id: int = None, force_update: bool = False):
                 log_task_execution('failed', 0, result.error_message)
         else:
             # Generate reels for all reports (original behavior)
-            logger.info(f"Processing limit: 10 reports per run")
+            logger.info(f"Processing limit: 3 reports per run")
             
             stats = generator.generate_for_all_reports(
                 force_update=force_update,
-                limit=10
+                limit=3
             )
             
             # Log completion
