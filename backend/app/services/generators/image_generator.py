@@ -576,7 +576,8 @@ No text, no faces, no watermarks
                     gr.id,
                     gr.title,
                     gr.content,
-                    gr.updated_at
+                    gr.updated_at,
+                    gr.created_at
                 FROM generated_report gr
                 WHERE gr.status = 'draft'
                     AND NOT EXISTS (
@@ -616,7 +617,7 @@ No text, no faces, no watermarks
         """جلب التقارير بدون صور (بدون فلتر الفشل)"""
         try:
             query = """
-                SELECT gr.id, gr.title, gr.content, gr.updated_at
+                SELECT gr.id, gr.title, gr.content, gr.updated_at, gr.created_at
                 FROM generated_report gr
                 WHERE gr.status = 'draft'
                     AND NOT EXISTS (
@@ -635,7 +636,7 @@ No text, no faces, no watermarks
         """جلب التقارير الأخيرة"""
         try:
             query = """
-                SELECT id, title, content, updated_at
+                SELECT id, title, content, updated_at, created_at
                 FROM generated_report
                 WHERE status = 'draft'
                 ORDER BY updated_at DESC
