@@ -433,6 +433,19 @@ if __name__ == "__main__":
     logger.info("Multi-Threaded Task Scheduler")
     logger.info("=" * 70)
     logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
+    
+    # Check FFmpeg availability
+    try:
+        from app.utils.audio_converter import AudioConverter
+        audio_converter = AudioConverter()
+        
+        if audio_converter.is_ffmpeg_available():
+            logger.info("✅ FFmpeg available")
+        else:
+            logger.warning("⚠️  FFmpeg not available - audio features may be limited")
+    except Exception as e:
+        logger.warning(f"⚠️  Could not check FFmpeg availability: {e}")
+    
     logger.info("=" * 70)
     
     # Graceful shutdown handler
