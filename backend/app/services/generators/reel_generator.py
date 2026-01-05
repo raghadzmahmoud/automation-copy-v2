@@ -1265,8 +1265,10 @@ class ReelGenerator:
                 text = text.strip()
                 
                 if arabic_support:
-                    # Enhanced Arabic processing for Render
-                    # Split text into sentences first (better for Arabic)
+                    # ✅ الحل الصحيح: تقسيم النص أولاً ثم معالجة كل سطر
+                    print(f"   🔤 Original text: '{text}'")
+                    
+                    # 1️⃣ تقسيم النص الخام إلى جمل أولاً
                     import re
                     sentences = re.split(r'[.!؟]\s+', text)
                     sentences = [s.strip() for s in sentences if s.strip()]
@@ -1274,48 +1276,49 @@ class ReelGenerator:
                     if not sentences:
                         sentences = [text]  # fallback to original text
                     
-                    # Process each sentence separately for better RTL handling
-                    processed_lines = []
+                    # 2️⃣ تكوين الأسطر بناءً على عدد الكلمات (بدون معالجة عربية)
+                    lines_raw = []
                     
                     for sentence in sentences:
-                        # Split sentence into words
+                        # تقسيم الجملة إلى كلمات
                         words = sentence.split()
                         
-                        # Group words into lines (3-4 words per line for Render mobile optimization)
-                        max_words_per_line = 3  # Reduced for better mobile readability on Render
+                        # تجميع الكلمات في أسطر (3-4 كلمات لكل سطر)
+                        max_words_per_line = 3  # محسن للموبايل
                         current_line = []
                         
                         for word in words:
                             current_line.append(word)
                             if len(current_line) >= max_words_per_line:
-                                line_text = ' '.join(current_line)
-                                
-                                # Apply Arabic reshaping and BiDi to each line
-                                try:
-                                    # Use more robust Arabic processing
-                                    reshaped_line = arabic_reshaper.reshape(line_text)
-                                    rtl_line = get_display(reshaped_line)
-                                    processed_lines.append(rtl_line)
-                                except Exception as e:
-                                    print(f"   ⚠️  Arabic processing failed for line '{line_text}': {e}")
-                                    # Fallback: use original text
-                                    processed_lines.append(line_text)
-                                
+                                lines_raw.append(' '.join(current_line))
                                 current_line = []
                         
-                        # Add remaining words in the sentence
+                        # إضافة الكلمات المتبقية
                         if current_line:
-                            line_text = ' '.join(current_line)
+                            lines_raw.append(' '.join(current_line))
+                    
+                    # 3️⃣ الخطوة الأهم: معالجة العربية لكل سطر قبل الرسم
+                    processed_lines = []
+                    
+                    for line in lines_raw:
+                        # تحقق إذا السطر يحتوي على عربي
+                        if any('\u0600' <= c <= '\u06FF' for c in line):
                             try:
-                                reshaped_line = arabic_reshaper.reshape(line_text)
+                                # معالجة العربية لهذا السطر فقط
+                                reshaped_line = arabic_reshaper.reshape(line)
                                 rtl_line = get_display(reshaped_line)
                                 processed_lines.append(rtl_line)
+                                print(f"   🔄 Arabic line processed: '{line}' → '{rtl_line}'")
                             except Exception as e:
-                                print(f"   ⚠️  Arabic processing failed for final line '{line_text}': {e}")
-                                processed_lines.append(line_text)
+                                print(f"   ⚠️  Arabic processing failed for line '{line}': {e}")
+                                processed_lines.append(line)  # fallback للنص العادي
+                        else:
+                            # نص إنجليزي - لا يحتاج معالجة
+                            processed_lines.append(line)
+                            print(f"   ✅ English line (no processing): '{line}'")
                     
                     lines = processed_lines
-                    print(f"   ✅ Processed {len(lines)} lines with Arabic RTL support (Render optimized)")
+                    print(f"   ✅ Processed {len(lines)} lines with correct Arabic RTL support")
                     
                 else:
                     # Fallback processing for when Arabic libraries aren't available

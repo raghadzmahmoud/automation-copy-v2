@@ -395,6 +395,16 @@ def publish_to_social_media():
         }
 
 
+def publish_content():
+    """
+    Alias for publish_to_social_media() for backward compatibility
+    
+    Returns:
+        Dict with execution results
+    """
+    return publish_to_social_media()
+
+
 # ============================================
 # Testing & Manual Execution
 # ============================================

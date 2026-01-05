@@ -544,41 +544,32 @@ class SocialImageGenerator:
         # تنظيف النص من المسافات الزائدة والأحرف الخاصة
         title = title.strip()
         
-        # تقسيم النص إلى كلمات مع معالجة خاصة للعربية
-        words = title.split()
+        print(f"   🔤 Original text: '{title}'")
+        
+        # ✅ الحل الصحيح: تقسيم النص أولاً ثم معالجة كل سطر
         temp = ImageDraw.Draw(Image.new('RGB', img.size))
         max_w = img.size[0] - 140
         
+        # 1️⃣ تقسيم النص الخام (بدون معالجة عربية) إلى كلمات
+        raw_title = title.strip()
+        words = raw_title.split()
+        
+        # 2️⃣ تكوين الأسطر بناءً على العرض (بدون معالجة عربية)
         lines_raw = []
         cur = []
         
         for word in words:
-            test = ' '.join(cur + [word])
+            test_line = ' '.join(cur + [word])
             
-            # معالجة النص العربي بالترتيب الصحيح
             try:
-                # تحقق إذا النص يحتوي على عربي
-                has_arabic = any('\u0600' <= char <= '\u06FF' for char in test)
-                
-                if has_arabic:
-                    # إعادة تشكيل النص العربي أولاً
-                    reshaped = arabic_reshaper.reshape(test)
-                    # ثم تطبيق خوارزمية BiDi للاتجاه الصحيح
-                    bidi_text = get_display(reshaped)
-                else:
-                    # نص إنجليزي - لا يحتاج معالجة
-                    bidi_text = test
-                
-                # قياس عرض النص
-                bbox = temp.textbbox((0, 0), bidi_text, font=font)
+                # قياس عرض النص (استخدام النص الخام للقياس)
+                bbox = temp.textbbox((0, 0), test_line, font=font)
                 text_width = bbox[2] - bbox[0]
                 
             except Exception as e:
-                print(f"   ⚠️  Arabic processing error for '{test}': {e}")
-                # fallback للنص العادي
-                bidi_text = test
-                bbox = temp.textbbox((0, 0), bidi_text, font=font)
-                text_width = bbox[2] - bbox[0]
+                print(f"   ⚠️  Text measurement error: {e}")
+                # تقدير تقريبي للعرض
+                text_width = len(test_line) * 20
             
             if text_width <= max_w:
                 cur.append(word)
@@ -593,35 +584,31 @@ class SocialImageGenerator:
         # تحديد عدد الأسطر المسموح (3 كحد أقصى)
         if len(lines_raw) > 3:
             lines_raw = lines_raw[:3]
-            lines_raw[2] += '...'
+            if len(lines_raw[2]) > 50:  # إذا كان السطر الأخير طويل
+                lines_raw[2] = lines_raw[2][:47] + '...'
         
-        # معالجة كل سطر للعربية بشكل محسن
+        # 3️⃣ الخطوة الأهم: معالجة العربية لكل سطر قبل الرسم
         lines = []
-        for line_text in lines_raw:
-            try:
-                # تنظيف النص أولاً
-                clean_text = line_text.strip()
-                
-                # تحقق إذا النص يحتوي على عربي
-                has_arabic = any('\u0600' <= char <= '\u06FF' for char in clean_text)
-                
-                if has_arabic:
-                    # معالجة النص العربي بالطريقة الصحيحة
-                    # إعادة تشكيل النص العربي (ربط الحروف)
-                    reshaped = arabic_reshaper.reshape(clean_text)
-                    # تطبيق خوارزمية BiDi للاتجاه الصحيح (RTL)
+        for line in lines_raw:
+            # تحقق إذا السطر يحتوي على عربي
+            if any('\u0600' <= c <= '\u06FF' for c in line):
+                try:
+                    # معالجة العربية لهذا السطر فقط
+                    reshaped = arabic_reshaper.reshape(line)
                     bidi_line = get_display(reshaped)
                     lines.append(bidi_line)
-                    print(f"   ✅ Arabic processed: '{clean_text}' → '{bidi_line}'")
-                else:
-                    # نص إنجليزي - لا يحتاج معالجة
-                    lines.append(clean_text)
-                    print(f"   ✅ English text: '{clean_text}'")
-                    
-            except Exception as e:
-                print(f"   ⚠️  Arabic line processing error for '{line_text}': {e}")
-                # fallback للنص العادي
-                lines.append(line_text)
+                    print(f"   🔄 Arabic line processed: '{line}' → '{bidi_line}'")
+                except Exception as e:
+                    print(f"   ⚠️  Arabic processing error for line '{line}': {e}")
+                    lines.append(line)  # fallback للنص العادي
+            else:
+                # نص إنجليزي - لا يحتاج معالجة
+                lines.append(line)
+                print(f"   ✅ English line (no processing): '{line}'")
+        
+        print(f"   📝 Final lines for drawing:")
+        for i, line in enumerate(lines):
+            print(f"      Line {i+1}: '{line}'")
         
         # إعدادات النص المحسنة لفيسبوك
         lh = 75  # المسافة بين الأسطر
@@ -654,7 +641,7 @@ class SocialImageGenerator:
         draw = ImageDraw.Draw(img)
         y = by + py
         
-        # رسم كل سطر مع معالجة خاصة للعربية
+        # رسم كل سطر (النص معالج مسبقاً بشكل صحيح)
         for line in lines:
             try:
                 bbox = draw.textbbox((0, 0), line, font=font)
@@ -668,6 +655,31 @@ class SocialImageGenerator:
                 # النص الأساسي
                 draw.text((x, y), line, font=font, fill='white')
                 
+                print(f"   ✅ Drew line at ({x}, {y}): '{line}'")
+                y += lh
+                
+            except Exception as e:
+                print(f"   ⚠️  Error drawing line '{line}': {e}")
+                # محاولة رسم بسيطة كـ fallback
+                try:
+                    x = (img.size[0] - 200) // 2  # تقدير تقريبي
+                    draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 220))
+                    draw.text((x, y), line, font=font, fill='white')
+                    y += lh
+                except:
+                    print(f"   ❌ Complete failure drawing line: {line}")
+        
+        return img
+                
+                # محاذاة النص في المنتصف (مناسب للعربية والإنجليزية)
+                x = (img.size[0] - lw) // 2
+                
+                # Shadow أوضح
+                draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 220))
+                # النص الأساسي
+                draw.text((x, y), line, font=font, fill='white')
+                
+                print(f"   ✅ Drew line at ({x}, {y}): '{line}'")
                 y += lh
                 
             except Exception as e:

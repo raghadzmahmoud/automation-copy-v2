@@ -3,8 +3,8 @@
 🎯 Media Worker - Images, Reels & Publishing Only
 ═══════════════════════════════════════════════════════════════
 وركر إنتاج مخصص لـ:
-- توليد الصور (Social Media Images) - 4 تقارير
-- توليد الريلز (Reels) - 4 تقارير  
+- توليد الصور (Social Media Images) - 1 تقرير
+- توليد الريلز (Reels) - 1 تقرير  
 - النشر (Publishing)
 
 Production Deployment Worker for Render
@@ -95,8 +95,8 @@ def test_social_media_images():
         
         generator = SocialImageGenerator()
         
-        # توليد صور لـ 4 تقارير (بدلاً من 10)
-        stats = generator.generate_for_all_reports(force_update=False, limit=4)
+        # توليد صور لتقرير واحد فقط
+        stats = generator.generate_for_all_reports(force_update=False, limit=1)
         
         logger.info(f"📊 Social Media Images Results:")
         logger.info(f"   Total reports: {stats.get('total_reports', 0)}")
@@ -128,8 +128,8 @@ def test_reel_generation():
         
         generator = ReelGenerator()
         
-        # توليد ريلز لـ 4 تقارير (بدلاً من 10)
-        stats = generator.generate_for_all_reports(force_update=False, limit=4)
+        # توليد ريل لتقرير واحد فقط
+        stats = generator.generate_for_all_reports(force_update=False, limit=1)
         
         logger.info(f"📊 Reel Generation Results:")
         logger.info(f"   Total reports: {stats.get('total_reports', 0)}")
@@ -254,7 +254,7 @@ def continuous_mode():
     """وضع التشغيل المستمر للإنتاج"""
     logger.info("🔄 Starting Media Worker Production Mode")
     logger.info("   Processing: Images, Reels & Publishing")
-    logger.info("   Batch Size: 4 reports per cycle")
+    logger.info("   Batch Size: 1 report per cycle")
     logger.info("   Cycle Interval: 2 minutes")
     
     cycle_count = 0
