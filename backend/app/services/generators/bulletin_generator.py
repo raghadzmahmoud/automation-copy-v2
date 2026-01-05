@@ -90,10 +90,17 @@ class BulletinResult:
 class BulletinGenerator:
     
     def __init__(self):
-        self.conn = psycopg2.connect(**DB_CONFIG)
+        # اتصال قاعدة البيانات مع دعم UTF-8
+        db_config = DB_CONFIG.copy()
+        if 'options' not in db_config:
+            db_config['options'] = '-c client_encoding=utf8'
+        
+        self.conn = psycopg2.connect(**db_config)
+        self.conn.set_client_encoding('UTF8')
         self.cursor = self.conn.cursor()
+        
         self.client = genai.Client(api_key=GEMINI_API_KEY)
-        print("✅ Connected to DB and Gemini")
+        print("✅ Connected to DB and Gemini with UTF-8 support")
     
     
     def generate_bulletin(

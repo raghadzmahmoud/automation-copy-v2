@@ -62,9 +62,14 @@ class SocialImageGenerator:
         print("📐 Facebook Optimized: 1200×630px (1.91:1)")
         print("=" * 60)
         
-        self.conn = psycopg2.connect(**DB_CONFIG)
+        # إعداد اتصال قاعدة البيانات مع UTF-8
+        db_config = DB_CONFIG.copy()
+        db_config['options'] = '-c client_encoding=utf8'
+        
+        self.conn = psycopg2.connect(**db_config)
+        self.conn.set_client_encoding('UTF8')
         self.cursor = self.conn.cursor()
-        print("✅ Database connected")
+        print("✅ Database connected with UTF-8 encoding")
         
         self.s3_client = boto3.client('s3')
         self.bucket_name = os.getenv('S3_BUCKET_NAME', 'media-automation-bucket')
@@ -290,13 +295,17 @@ class SocialImageGenerator:
     
     def _save_to_generated_content(self, report_id: int, images: Dict, force_update: bool) -> str:
         """
-        Save as JSON in content field
+        Save as JSON in content field with proper UTF-8 encoding
         
         Example:
         content = '{"h-GAZA": "url1", "DOT": "url2"}'
         """
         try:
-            content_json = json.dumps(images, ensure_ascii=False)
+            # التأكد من أن النصوص بترميز UTF-8
+            content_json = json.dumps(images, ensure_ascii=False, indent=None)
+            
+            # التأكد من أن الاتصال يستخدم UTF-8
+            self.cursor.execute("SET client_encoding TO 'UTF8'")
             
             self.cursor.execute("""
                 SELECT id FROM generated_content
@@ -325,6 +334,33 @@ class SocialImageGenerator:
                 return 'created'
         except Exception as e:
             print(f"   ⚠️  Save failed: {e}")
+            print(f"   🔍 Error type: {type(e).__name__}")
+            if "codec" in str(e).lower() or "encoding" in str(e).lower():
+                print(f"   💡 This is an encoding issue - trying alternative approach...")
+                try:
+                    # محاولة بديلة مع ترميز صريح
+                    content_bytes = content_json.encode('utf-8')
+                    content_str = content_bytes.decode('utf-8')
+                    
+                    if existing:
+                        self.cursor.execute("""
+                            UPDATE generated_content
+                            SET content = %s, status = 'completed', updated_at = NOW()
+                            WHERE id = %s
+                        """, (content_str, existing[0]))
+                        self.conn.commit()
+                        return 'updated'
+                    else:
+                        self.cursor.execute("""
+                            INSERT INTO generated_content (
+                                report_id, content_type_id, content, status, created_at, updated_at
+                            ) VALUES (%s, %s, %s, 'completed', NOW(), NOW())
+                        """, (report_id, self.FACEBOOK_TEMPLATE_ID, content_str))
+                        self.conn.commit()
+                        return 'created'
+                except Exception as e2:
+                    print(f"   ❌ Alternative approach also failed: {e2}")
+            
             self.conn.rollback()
             return 'failed'
     

@@ -62,11 +62,17 @@ class ImageGenerator:
         self.conn = None
         self.cursor = None
         
-        # اتصال قاعدة البيانات
+        # اتصال قاعدة البيانات مع دعم UTF-8
         try:
-            self.conn = psycopg2.connect(**DB_CONFIG)
+            db_config = DB_CONFIG.copy()
+            # التأكد من إعدادات UTF-8
+            if 'options' not in db_config:
+                db_config['options'] = '-c client_encoding=utf8'
+            
+            self.conn = psycopg2.connect(**db_config)
+            self.conn.set_client_encoding('UTF8')
             self.cursor = self.conn.cursor()
-            print("✅ ImageGenerator initialized (Database)")
+            print("✅ ImageGenerator initialized (Database with UTF-8)")
         except Exception as e:
             print(f"❌ Database connection failed: {e}")
             raise
