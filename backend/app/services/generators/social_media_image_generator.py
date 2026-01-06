@@ -496,11 +496,11 @@ class SocialImageGenerator:
         return logo.resize((int(w*scale), int(h*scale)), Image.Resampling.LANCZOS)
     
     def _create_image(self, bg: Image.Image, logo: Image.Image, title: str) -> Image.Image:
-        """Create"""
+        """Create - background with logo only, no text"""
         bg = self._resize_to_fit(bg)
         bg = self._enhance_image(bg)
         bg = self._add_logo(bg, logo)
-        bg = self._add_title_with_box(bg, title)
+        # Removed: bg = self._add_title_with_box(bg, title)
         return bg
     
     def _resize_to_fit(self, img: Image.Image) -> Image.Image:
