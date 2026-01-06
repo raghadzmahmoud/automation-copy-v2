@@ -283,9 +283,15 @@ class AudioInputProcessorV2:
     def _update_error(self, uploaded_file_id, error_msg):
         """Update with error"""
         try:
-            import json
-            query = "UPDATE uploaded_files SET processing_status = 'failed', metadata = %s::jsonb WHERE id = %s"
-            self.cursor.execute(query, (json.dumps({'error': error_msg}), uploaded_file_id))
+            query = """
+                UPDATE uploaded_files 
+                SET processing_status = 'failed', 
+                    error_message = %s,
+                    retry_count = COALESCE(retry_count, 0) + 1,
+                    updated_at = NOW()
+                WHERE id = %s
+            """
+            self.cursor.execute(query, (error_msg, uploaded_file_id))
             self.conn.commit()
         except:
             self.conn.rollback()

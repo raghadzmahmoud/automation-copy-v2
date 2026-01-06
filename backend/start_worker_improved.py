@@ -78,7 +78,7 @@ def import_jobs():
     global scrape_news, cluster_news, generate_reports
     global generate_social_media_content, generate_images, generate_audio
     global generate_social_media_images, generate_reels, publish_to_social_media
-    global generate_all_broadcasts
+    global generate_all_broadcasts, run_audio_transcription_job
     
     # Import original functions
     from app.jobs.scraper_job import scrape_news as _scrape_news
@@ -91,6 +91,7 @@ def import_jobs():
     from app.jobs.reel_generation_job import generate_reels as _generate_reels
     from app.jobs.publishers_job import publish_to_social_media as _publish_to_social_media
     from app.jobs.broadcast_job import generate_all_broadcasts as _generate_all_broadcasts
+    from app.jobs.audio_transcription_job import run_audio_transcription_job as _run_audio_transcription_job
     
     # Wrap with timeout decorators
     scrape_news = timeout_job_by_type('scraping')(_scrape_news)
@@ -103,10 +104,12 @@ def import_jobs():
     generate_reels = timeout_job_by_type('video')(_generate_reels)
     publish_to_social_media = timeout_job_by_type('publishing')(_publish_to_social_media)
     generate_all_broadcasts = timeout_job_by_type('broadcast')(_generate_all_broadcasts)
+    run_audio_transcription_job = timeout_job_by_type('audio')(_run_audio_transcription_job)
     
     logger.info("✅ All jobs imported with timeout protection")
     logger.info("📋 Main Cycle Jobs:")
     logger.info("   📥 scrape_news")
+    logger.info("   🎙️ audio_transcription (STT)")
     logger.info("   🔄 cluster_news")
     logger.info("   📝 generate_reports")
     logger.info("   📱 generate_social_media_content")
@@ -179,6 +182,7 @@ def run_main_cycle() -> Dict:
     # تسلسل الـ jobs في الدورة الأساسية
     main_jobs = [
         ('scraping', scrape_news),
+        ('audio_transcription', run_audio_transcription_job),
         ('clustering', cluster_news),
         ('reports', generate_reports),
         ('social_media_content', generate_social_media_content),
@@ -354,6 +358,72 @@ def run_cycle(cycle_number: int) -> Dict:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Manual Job Execution (for API)
+# ═══════════════════════════════════════════════════════════════
+
+def run_job_now(task_type: str) -> bool:
+    """
+    تشغيل job يدوياً من الـ API
+    
+    Args:
+        task_type: نوع الـ task (مثل: audio_transcription, clustering, etc.)
+    
+    Returns:
+        bool: نجح أو لا
+    """
+    try:
+        # Import the specific job
+        if task_type == 'audio_transcription':
+            from app.jobs.audio_transcription_job import run_audio_transcription_job
+            result = run_audio_transcription_job()
+            return result.get('success', 0) > 0 or result.get('processed', 0) == 0
+            
+        elif task_type == 'scraping':
+            from app.jobs.scraper_job import scrape_news
+            result = scrape_news()
+            return not result.get('error')
+            
+        elif task_type == 'clustering':
+            from app.jobs.clustering_job import cluster_news
+            result = cluster_news()
+            return not result.get('error')
+            
+        elif task_type == 'report_generation':
+            from app.jobs.reports_job import generate_reports
+            result = generate_reports()
+            return not result.get('error')
+            
+        elif task_type == 'social_media_generation':
+            from app.jobs.social_media_job import generate_social_media_content
+            result = generate_social_media_content()
+            return not result.get('error')
+            
+        elif task_type == 'image_generation':
+            from app.jobs.image_generation_job import generate_images
+            result = generate_images()
+            return not result.get('error')
+            
+        elif task_type == 'audio_generation':
+            from app.jobs.audio_generation_job import generate_audio
+            result = generate_audio()
+            return not result.get('error')
+            
+        elif task_type == 'bulletin_generation' or task_type == 'digest_generation':
+            from app.jobs.broadcast_job import generate_all_broadcasts
+            result = generate_all_broadcasts()
+            return not result.get('error')
+            
+        else:
+            logger.error(f"Unknown task type: {task_type}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error running job {task_type}: {e}")
+        traceback.print_exc()
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════
 # Main Loop
 # ═══════════════════════════════════════════════════════════════
 
@@ -402,14 +472,15 @@ def main():
     logger.info("")
     logger.info("Main Cycle Jobs (Sequential):")
     logger.info("  1. 📥 Scraping")
-    logger.info("  2. 🔄 Clustering") 
-    logger.info("  3. 📝 Reports Generation")
-    logger.info("  4. 📱 Social Media Content")
-    logger.info("  5. 🖼️ Image Generation")
-    logger.info("  6. 🎵 Audio Generation")
-    logger.info("  7. 📱 Social Media Images")
-    logger.info("  8. 🎬 Reel Generation")
-    logger.info("  9. 📤 Publishing")
+    logger.info("  2. 🎙️ Audio Transcription (STT)")
+    logger.info("  3. 🔄 Clustering") 
+    logger.info("  4. 📝 Reports Generation")
+    logger.info("  5. 📱 Social Media Content")
+    logger.info("  6. 🖼️ Image Generation")
+    logger.info("  7. 🎵 Audio Generation")
+    logger.info("  8. 📱 Social Media Images")
+    logger.info("  9. 🎬 Reel Generation")
+    logger.info("  10. 📤 Publishing")
     logger.info("")
     logger.info("Broadcast Cycle Jobs:")
     logger.info("  1. 📻 Newsletter & Digest Generation")

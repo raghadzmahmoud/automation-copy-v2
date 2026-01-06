@@ -196,9 +196,10 @@ async def run_task_now(task_type: str):
     - social_media_generation
     - image_generation
     - audio_generation
+    - audio_transcription
     """
     try:
-        from start_worker import run_job_now
+        from start_worker_improved import run_job_now
 
         success = run_job_now(task_type)
 
@@ -212,5 +213,127 @@ async def run_task_now(task_type: str):
 
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/audio-transcription/process/{file_id}")
+async def process_audio_file(file_id: int):
+    """
+    Process a specific audio file by ID.
+    Useful for retrying failed transcriptions.
+    """
+    try:
+        from app.jobs.audio_transcription_job import process_audio_file, get_pending_audio_files
+        import psycopg2
+        from settings import DB_CONFIG
+        
+        # Get file info
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, original_filename, file_path, file_type, retry_count, processing_status
+            FROM uploaded_files
+            WHERE id = %s AND file_type = 'audio'
+        """, (file_id,))
+        
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Audio file {file_id} not found")
+        
+        file_info = {
+            'id': row[0],
+            'original_filename': row[1],
+            'file_path': row[2],
+            'file_type': row[3],
+            'retry_count': row[4] or 0
+        }
+        
+        current_status = row[5]
+        
+        # Process the file
+        success = process_audio_file(file_info)
+        
+        return {
+            "success": success,
+            "file_id": file_id,
+            "previous_status": current_status,
+            "message": "Transcription completed" if success else "Transcription failed"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ==================== Audio Files Status ====================
+
+@router.get("/audio-files/pending")
+async def get_pending_audio_files():
+    """
+    Get all pending/failed audio files that need processing.
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, original_filename, file_path, processing_status, 
+                   retry_count, error_message, created_at, updated_at
+            FROM uploaded_files
+            WHERE file_type = 'audio'
+            AND (processing_status = 'pending' OR processing_status = 'failed')
+            ORDER BY created_at DESC
+            LIMIT 50
+        """)
+        
+        files = []
+        for row in cursor.fetchall():
+            files.append({
+                "id": row[0],
+                "original_filename": row[1],
+                "file_path": row[2],
+                "processing_status": row[3],
+                "retry_count": row[4] or 0,
+                "error_message": row[5],
+                "created_at": row[6].isoformat() if row[6] else None,
+                "updated_at": row[7].isoformat() if row[7] else None
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return {
+            "count": len(files),
+            "files": files
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/audio-files/retry-all")
+async def retry_all_failed_audio():
+    """
+    Retry processing all failed audio files.
+    """
+    try:
+        from app.jobs.audio_transcription_job import run_audio_transcription_job
+        
+        result = run_audio_transcription_job()
+        
+        return {
+            "success": True,
+            "processed": result.get('processed', 0),
+            "success_count": result.get('success', 0),
+            "failed_count": result.get('failed', 0)
+        }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
