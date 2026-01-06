@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 from datetime import datetime
 import psycopg2
-from settings import DB_CONFIG
+from settings import DB_CONFIG, S3_BUCKET_NAME, AWS_REGION
 
 # Logging setup
 log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
@@ -33,6 +33,27 @@ logger = logging.getLogger(__name__)
 
 # Max retries before giving up
 MAX_RETRIES = 3
+
+# S3 URL base
+S3_BASE_URL = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/"
+
+
+def build_full_url(file_path: str) -> str:
+    """
+    بناء الـ URL الكامل من الـ file_path
+    لو الـ path نسبي (مثل original/audios/...) بيضيف الـ S3 base URL
+    """
+    if not file_path:
+        return file_path
+    
+    # لو الـ URL كامل، رجعه زي ما هو
+    if file_path.startswith('http://') or file_path.startswith('https://'):
+        return file_path
+    
+    # لو مسار نسبي، ابني الـ URL الكامل
+    # أزل أي / من البداية
+    clean_path = file_path.lstrip('/')
+    return f"{S3_BASE_URL}{clean_path}"
 
 
 def get_pending_audio_files():
@@ -197,6 +218,15 @@ def process_audio_file(file_info: dict) -> bool:
         update_file_status(file_id, 'completed')
         return True
     
+    # بناء الـ URL الكامل
+    full_url = build_full_url(file_path)
+    logger.info(f"Full URL: {full_url}")
+    
+    if not full_url:
+        logger.error(f"No file path for file {file_id}")
+        update_file_status(file_id, 'failed', 'No file path available')
+        return False
+    
     try:
         # Import services
         from app.services.generators.stt_service import STTService
@@ -206,7 +236,7 @@ def process_audio_file(file_info: dict) -> bool:
         # Step 1: Transcribe
         logger.info(f"Step 1: Transcribing audio...")
         stt_service = STTService()
-        stt_result = stt_service.transcribe_audio(file_path)
+        stt_result = stt_service.transcribe_audio(full_url)
         
         if not stt_result.get('success'):
             error_msg = stt_result.get('error', 'STT failed')
@@ -276,6 +306,9 @@ def run_audio_transcription_job():
     logger.info("🎙️ Starting Audio Transcription Job")
     logger.info("=" * 60)
     
+    # Fix old records with relative paths
+    fix_relative_paths()
+    
     # Get pending files
     pending_files = get_pending_audio_files()
     
@@ -310,6 +343,36 @@ def run_audio_transcription_job():
         'success': success_count,
         'failed': failed_count
     }
+
+
+def fix_relative_paths():
+    """
+    تصليح الـ file_path النسبية في الـ records القديمة
+    """
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # Update records with relative paths
+        cursor.execute("""
+            UPDATE uploaded_files
+            SET file_path = %s || file_path
+            WHERE file_type = 'audio'
+            AND file_path IS NOT NULL
+            AND file_path != ''
+            AND file_path NOT LIKE 'http%%'
+        """, (S3_BASE_URL,))
+        
+        updated = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        if updated > 0:
+            logger.info(f"Fixed {updated} records with relative paths")
+        
+    except Exception as e:
+        logger.error(f"Error fixing relative paths: {e}")
 
 
 if __name__ == "__main__":

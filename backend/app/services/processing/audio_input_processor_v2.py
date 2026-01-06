@@ -58,6 +58,8 @@ class AudioInputProcessorV2:
         print(f"🎙️ Processing Audio: {file.filename}")
         print(f"{'='*70}")
         
+        uploaded_file_id = None
+        
         try:
             # Get file info
             original_filename = file.filename
@@ -69,6 +71,7 @@ class AudioInputProcessorV2:
             file_size = len(audio_bytes)
             
             print(f"\n📋 Original File: {original_filename} ({file_size} bytes)")
+            print(f"   MIME Type: {mime_type}")
             
             # ========================================
             # Step 1: Convert to WAV (same as video)
@@ -77,7 +80,14 @@ class AudioInputProcessorV2:
             wav_file = self._convert_to_wav(audio_bytes, original_filename)
             
             if not wav_file:
-                return {'success': False, 'error': 'فشل تحويل الصوت', 'step': 'conversion'}
+                # Save metadata with error before returning
+                uploaded_file_id = self._save_metadata_with_error(
+                    original_filename=original_filename,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                    error_msg='فشل تحويل الصوت إلى WAV'
+                )
+                return {'success': False, 'error': 'فشل تحويل الصوت', 'step': 'conversion', 'uploaded_file_id': uploaded_file_id}
             
             # ========================================
             # Step 2: Upload WAV to S3
@@ -86,7 +96,13 @@ class AudioInputProcessorV2:
             upload_result = self.s3_uploader.upload_audio(wav_file.file, wav_file.filename)
             
             if not upload_result['success']:
-                return {'success': False, 'error': f"فشل رفع الملف: {upload_result.get('error')}", 'step': 'upload'}
+                uploaded_file_id = self._save_metadata_with_error(
+                    original_filename=original_filename,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                    error_msg=f"فشل رفع الملف: {upload_result.get('error')}"
+                )
+                return {'success': False, 'error': f"فشل رفع الملف: {upload_result.get('error')}", 'step': 'upload', 'uploaded_file_id': uploaded_file_id}
             
             audio_url = upload_result['url']
             print(f"✅ Uploaded: {audio_url}")
@@ -112,6 +128,8 @@ class AudioInputProcessorV2:
             if not uploaded_file_id:
                 return {'success': False, 'error': 'فشل حفظ metadata', 'step': 'metadata'}
             
+            print(f"   ✅ Saved with ID: {uploaded_file_id}")
+            
             # ========================================
             # Step 4: Transcribe
             # ========================================
@@ -119,8 +137,9 @@ class AudioInputProcessorV2:
             stt_result = self.stt_service.transcribe_audio(audio_url)
             
             if not stt_result['success']:
-                self._update_error(uploaded_file_id, stt_result.get('error', 'STT failed'))
-                return {'success': False, 'error': f"فشل STT: {stt_result.get('error')}", 'step': 'stt'}
+                error_msg = stt_result.get('error', 'STT failed')
+                self._update_error(uploaded_file_id, error_msg)
+                return {'success': False, 'error': f"فشل STT: {error_msg}", 'step': 'stt', 'uploaded_file_id': uploaded_file_id}
             
             transcription = stt_result['text']
             print(f"✅ Transcription: {transcription[:100]}...")
@@ -136,7 +155,7 @@ class AudioInputProcessorV2:
             
             if not refine_result['success']:
                 self._update_error(uploaded_file_id, 'Refiner failed')
-                return {'success': False, 'error': 'فشل Refiner', 'step': 'refiner'}
+                return {'success': False, 'error': 'فشل Refiner', 'step': 'refiner', 'uploaded_file_id': uploaded_file_id}
             
             title = refine_result['title']
             content = refine_result['content']
@@ -165,7 +184,7 @@ class AudioInputProcessorV2:
             
             if not news_id:
                 self._update_error(uploaded_file_id, 'فشل حفظ الخبر')
-                return {'success': False, 'error': 'فشل حفظ الخبر', 'step': 'save_news'}
+                return {'success': False, 'error': 'فشل حفظ الخبر', 'step': 'save_news', 'uploaded_file_id': uploaded_file_id}
             
             # Update status
             self._update_status(uploaded_file_id, 'completed')
@@ -188,31 +207,52 @@ class AudioInputProcessorV2:
             print(f"\n❌ ERROR: {e}")
             import traceback
             traceback.print_exc()
-            return {'success': False, 'error': str(e), 'step': 'unknown'}
+            
+            # Try to save error if we have uploaded_file_id
+            if uploaded_file_id:
+                self._update_error(uploaded_file_id, str(e))
+            
+            return {'success': False, 'error': str(e), 'step': 'unknown', 'uploaded_file_id': uploaded_file_id}
     
     def _convert_to_wav(self, audio_bytes: bytes, filename: str) -> Optional[UploadFile]:
         """Convert audio to WAV (16kHz, mono) - same as video extraction"""
         try:
             # Save to temp file
-            temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
+            file_ext = os.path.splitext(filename)[1].lower()
+            if not file_ext:
+                file_ext = '.webm'  # default for browser recordings
+            
+            temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
             temp_input.write(audio_bytes)
             temp_input.close()
+            
+            print(f"   📁 Temp input: {temp_input.name} ({len(audio_bytes)} bytes)")
             
             # Convert to WAV
             temp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
             temp_output_path = temp_output.name
             temp_output.close()
             
-            audio_clip = AudioFileClip(temp_input.name)
-            audio_clip.write_audiofile(
-                temp_output_path,
-                codec="pcm_s16le",
-                fps=16000,
-                nbytes=2,
-                ffmpeg_params=["-ac", "1"],
-                logger=None
-            )
-            audio_clip.close()
+            try:
+                audio_clip = AudioFileClip(temp_input.name)
+                audio_clip.write_audiofile(
+                    temp_output_path,
+                    codec="pcm_s16le",
+                    fps=16000,
+                    nbytes=2,
+                    ffmpeg_params=["-ac", "1"],
+                    logger=None
+                )
+                audio_clip.close()
+            except Exception as conv_error:
+                print(f"   ❌ MoviePy conversion failed: {conv_error}")
+                # Cleanup
+                try:
+                    os.unlink(temp_input.name)
+                    os.unlink(temp_output_path)
+                except:
+                    pass
+                return None
             
             # Read WAV
             with open(temp_output_path, 'rb') as f:
@@ -221,6 +261,10 @@ class AudioInputProcessorV2:
             # Cleanup
             os.unlink(temp_input.name)
             os.unlink(temp_output_path)
+            
+            if len(wav_content) < 1000:
+                print(f"   ❌ WAV file too small: {len(wav_content)} bytes")
+                return None
             
             print(f"   ✅ Converted to WAV: {len(wav_content)} bytes")
             
@@ -231,6 +275,8 @@ class AudioInputProcessorV2:
             
         except Exception as e:
             print(f"   ❌ Conversion failed: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _save_metadata(self, original_filename, stored_filename, file_path, file_size, mime_type):
@@ -240,9 +286,9 @@ class AudioInputProcessorV2:
             query = """
                 INSERT INTO uploaded_files (
                     original_filename, stored_filename, file_path, file_size,
-                    file_type, mime_type, processing_status, retry_count, metadata, created_at
+                    file_type, mime_type, processing_status, retry_count, metadata, created_at, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
                 RETURNING id
             """
             self.cursor.execute(query, (
@@ -254,6 +300,40 @@ class AudioInputProcessorV2:
             return uploaded_file_id
         except Exception as e:
             print(f"❌ Save metadata error: {e}")
+            self.conn.rollback()
+            return None
+    
+    def _save_metadata_with_error(self, original_filename, file_size, mime_type, error_msg):
+        """Save metadata with error status (for early failures)"""
+        try:
+            import json
+            query = """
+                INSERT INTO uploaded_files (
+                    original_filename, stored_filename, file_path, file_size,
+                    file_type, mime_type, processing_status, retry_count, 
+                    error_message, metadata, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
+                RETURNING id
+            """
+            self.cursor.execute(query, (
+                original_filename, 
+                '',  # no stored filename yet
+                '',  # no file path yet
+                file_size,
+                'audio', 
+                mime_type, 
+                'failed', 
+                0, 
+                error_msg,
+                json.dumps({'early_failure': True})
+            ))
+            uploaded_file_id = self.cursor.fetchone()[0]
+            self.conn.commit()
+            print(f"   ⚠️ Saved failed record with ID: {uploaded_file_id}")
+            return uploaded_file_id
+        except Exception as e:
+            print(f"❌ Save metadata with error failed: {e}")
             self.conn.rollback()
             return None
     

@@ -64,11 +64,13 @@ def _build_success_response(result: dict) -> dict:
     }
 
 
-def _build_error_response(message: str, step: Optional[str] = None):
+def _build_error_response(message: str, step: Optional[str] = None, uploaded_file_id: Optional[int] = None):
     """Unified error response"""
     return {
         "success": False,
-        "data": None,
+        "data": {
+            "uploaded_file_id": uploaded_file_id
+        } if uploaded_file_id else None,
         "error": {
             "message": message,
             "step": step
@@ -108,7 +110,8 @@ async def upload_audio(
         if not result.get("success"):
             return _build_error_response(
                 message=result.get("error", "Audio processing failed"),
-                step=result.get("step")
+                step=result.get("step"),
+                uploaded_file_id=result.get("uploaded_file_id")
             )
 
         return _build_success_response(result)
@@ -151,7 +154,8 @@ async def record_audio(
         if not result.get("success"):
             return _build_error_response(
                 message=result.get("error", "Audio recording processing failed"),
-                step=result.get("step")
+                step=result.get("step"),
+                uploaded_file_id=result.get("uploaded_file_id")
             )
 
         return _build_success_response(result)
