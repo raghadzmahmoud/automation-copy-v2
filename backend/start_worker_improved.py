@@ -126,8 +126,8 @@ def import_jobs():
 # الفترة الأساسية بين الدورات (بالثواني)
 BASE_CYCLE_INTERVAL = int(os.getenv('CYCLE_INTERVAL', 120))  # 2 دقيقة default  
 
-# نمط الدورات: دورتين أساسيتين ثم دورة نشرة
-CYCLE_PATTERN = ['main', 'main', 'broadcast']  # Main → Main → Broadcast → repeat
+# نمط الدورات: نشرة أولاً ثم دورتين أساسيتين
+CYCLE_PATTERN = ['broadcast', 'main', 'main']  # Broadcast → Main → Main → repeat
 
 
 # ═══════════════════════════════════════════════════════════════

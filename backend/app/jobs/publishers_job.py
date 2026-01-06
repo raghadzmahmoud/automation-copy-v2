@@ -18,7 +18,8 @@ import sys
 import time
 import logging
 import psycopg2
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -31,6 +32,110 @@ from app.services.publishers.instagram_publisher import InstagramPublisher
 from app.services.publishers.publish_telegram import TelegramPublisher
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# Publishing Pause Management
+# ============================================
+
+PAUSE_FILE = os.path.join(os.path.dirname(__file__), '.publishing_pause.json')
+
+def set_publishing_pause(platform: str, hours: int = 12):
+    """
+    إيقاف النشر على منصة معينة لمدة محددة
+    
+    Args:
+        platform: 'facebook', 'instagram', or 'all'
+        hours: عدد الساعات للإيقاف
+    """
+    pause_until = datetime.now() + timedelta(hours=hours)
+    
+    # Load existing pauses
+    pauses = {}
+    if os.path.exists(PAUSE_FILE):
+        try:
+            with open(PAUSE_FILE, 'r') as f:
+                pauses = json.load(f)
+        except:
+            pauses = {}
+    
+    # Set pause
+    if platform == 'all':
+        pauses['facebook'] = pause_until.isoformat()
+        pauses['instagram'] = pause_until.isoformat()
+    else:
+        pauses[platform] = pause_until.isoformat()
+    
+    # Save
+    with open(PAUSE_FILE, 'w') as f:
+        json.dump(pauses, f, indent=2)
+    
+    logger.info(f"⏸️  Publishing paused for {platform} until {pause_until}")
+
+def is_publishing_paused(platform: str) -> bool:
+    """
+    التحقق من إيقاف النشر على منصة معينة
+    
+    Args:
+        platform: 'facebook' or 'instagram'
+    
+    Returns:
+        True if paused, False otherwise
+    """
+    if not os.path.exists(PAUSE_FILE):
+        return False
+    
+    try:
+        with open(PAUSE_FILE, 'r') as f:
+            pauses = json.load(f)
+        
+        if platform not in pauses:
+            return False
+        
+        pause_until = datetime.fromisoformat(pauses[platform])
+        
+        if datetime.now() < pause_until:
+            remaining = pause_until - datetime.now()
+            hours = remaining.total_seconds() / 3600
+            logger.info(f"⏸️  {platform.title()} publishing paused for {hours:.1f} more hours")
+            return True
+        else:
+            # Pause expired, remove it
+            del pauses[platform]
+            with open(PAUSE_FILE, 'w') as f:
+                json.dump(pauses, f, indent=2)
+            logger.info(f"▶️  {platform.title()} publishing pause expired, resuming")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error checking pause status: {e}")
+        return False
+
+def clear_publishing_pause(platform: str = 'all'):
+    """
+    إلغاء إيقاف النشر
+    
+    Args:
+        platform: 'facebook', 'instagram', or 'all'
+    """
+    if not os.path.exists(PAUSE_FILE):
+        return
+    
+    try:
+        with open(PAUSE_FILE, 'r') as f:
+            pauses = json.load(f)
+        
+        if platform == 'all':
+            pauses = {}
+        elif platform in pauses:
+            del pauses[platform]
+        
+        with open(PAUSE_FILE, 'w') as f:
+            json.dump(pauses, f, indent=2)
+        
+        logger.info(f"▶️  Publishing pause cleared for {platform}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error clearing pause: {e}")
 
 
 class PublishersJob:
@@ -387,6 +492,15 @@ class PublishersJob:
             'overall_success': False,
             'published_platforms': []
         }
+        
+        # ============================================
+        # Check if Facebook publishing is paused
+        # ============================================
+        if is_publishing_paused('facebook'):
+            logger.warning(f"⏸️  Facebook publishing is paused, skipping report #{report_id}")
+            results['facebook_post'] = {'success': False, 'message': 'Publishing paused'}
+            results['facebook_video'] = {'success': False, 'message': 'Publishing paused'}
+            return results
         
         # Update status
         self._update_report_status(report_id, 'publishing')
