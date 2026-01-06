@@ -130,6 +130,15 @@ class AudioInputProcessor:
                 file.file = BytesIO(content)
             
             # ========================================
+            # Detect mime_type FIRST (before upload)
+            # ========================================
+            mime_type = file.content_type if file.content_type else self._detect_mime_type(file.filename)
+            print(f"\n📋 File Info:")
+            print(f"   Filename: {file.filename}")
+            print(f"   MIME Type: {mime_type}")
+            print(f"   Size: {file_size} bytes")
+            
+            # ========================================
             # Step 1: رفع الملف على S3
             # ========================================
             print("\n📤 Step 1: Uploading to S3...")
@@ -207,13 +216,8 @@ class AudioInputProcessor:
             # Extract stored filename from s3_key
             stored_filename = s3_key.split('/')[-1]
             
-            # Detect mime_type from file.content_type (preferred) or filename (fallback)
-            mime_type = file.content_type if file.content_type else self._detect_mime_type(file.filename)
-            
             print(f"✅ Uploaded: {audio_url}")
-            print(f"📋 MIME Type: {mime_type}")
-            print(f"📋 Original Filename: {file.filename}")
-            print(f"📋 Content Type: {file.content_type}")
+            print(f"📋 Stored Filename: {stored_filename}")
             
             # ========================================
             # Step 2: حفظ metadata في uploaded_files
