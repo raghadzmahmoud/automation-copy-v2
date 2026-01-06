@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, status
 
-from app.services.processing.audio_input_processor import AudioInputProcessor
+from app.services.processing.audio_input_processor_v2 import AudioInputProcessorV2 as AudioInputProcessor
 
 router = APIRouter()
 
