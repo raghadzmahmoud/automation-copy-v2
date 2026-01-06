@@ -64,13 +64,16 @@ class PublishersJob:
             logger.error(f"❌ Facebook Publisher failed: {e}")
             self.publishers['facebook'] = None
         
-        # Instagram Publisher
-        try:
-            self.publishers['instagram'] = InstagramPublisher()
-            logger.info("✅ Instagram Publisher initialized")
-        except Exception as e:
-            logger.error(f"❌ Instagram Publisher failed: {e}")
-            self.publishers['instagram'] = None
+        # Instagram Publisher - DISABLED
+        # Instagram publishing is temporarily disabled
+        # try:
+        #     self.publishers['instagram'] = InstagramPublisher()
+        #     logger.info("✅ Instagram Publisher initialized")
+        # except Exception as e:
+        #     logger.error(f"❌ Instagram Publisher failed: {e}")
+        #     self.publishers['instagram'] = None
+        logger.info("⚠️  Instagram Publisher disabled - not initializing")
+        self.publishers['instagram'] = None
         
         # Telegram Publisher
         try:
@@ -156,7 +159,8 @@ class PublishersJob:
         self._update_report_status(report_id, 'publishing')
         
         # Publish to each platform
-        platforms_to_publish = ['facebook', 'instagram', 'telegram']
+        # DISABLED: Instagram publishing temporarily disabled
+        platforms_to_publish = ['facebook', 'telegram']  # 'instagram' removed
         
         for platform in platforms_to_publish:
             publisher = self.publishers.get(platform)
@@ -312,7 +316,8 @@ class PublishersJob:
         logger.info(f"Duration: {duration:.2f} seconds")
         
         # Platform breakdown
-        platform_stats = {'facebook': 0, 'instagram': 0, 'telegram': 0}
+        # Note: Instagram publishing is currently disabled
+        platform_stats = {'facebook': 0, 'telegram': 0}  # 'instagram' removed
         for result in results:
             for platform in result.get('published_platforms', []):
                 platform_stats[platform] += 1
