@@ -9,6 +9,7 @@
 - Telegram
 
 يعمل بشكل دوري ويبحث عن التقارير الجاهزة للنشر
+محدود بـ 3 تقارير فقط في كل دورة نشر
 ═══════════════════════════════════════════════════════════════
 """
 
@@ -80,8 +81,8 @@ class PublishersJob:
             self.publishers['telegram'] = None
         
         # Publishing settings
-        self.max_concurrent_publishes = 3  # عدد التقارير التي تنشر بنفس الوقت
-        self.max_reports_per_run = 10      # أقصى عدد تقارير في كل دورة
+        self.max_concurrent_publishes = 2  # عدد التقارير التي تنشر بنفس الوقت
+        self.max_reports_per_run = int(os.getenv('MAX_REPORTS_PER_PUBLISH', 3))  # أقصى عدد تقارير في كل دورة
     
     def get_reports_ready_for_publishing(self) -> List[Tuple[int, str, datetime]]:
         """
@@ -118,7 +119,7 @@ class PublishersJob:
             self.cursor.execute(sql, (self.max_reports_per_run,))
             results = self.cursor.fetchall()
             
-            logger.info(f"📊 Found {len(results)} reports ready for publishing")
+            logger.info(f"📊 Found {len(results)} reports ready for publishing (limited to {self.max_reports_per_run} per cycle)")
             
             return results
             
@@ -229,7 +230,7 @@ class PublishersJob:
             logger.info("📭 No reports to publish")
             return []
         
-        logger.info(f"🚀 Publishing {len(reports)} reports concurrently (max {self.max_concurrent_publishes} at once)")
+        logger.info(f"🚀 Publishing {len(reports)} reports concurrently (max {self.max_reports_per_run} reports per cycle, max {self.max_concurrent_publishes} at once)")
         
         results = []
         
@@ -273,6 +274,8 @@ class PublishersJob:
         
         logger.info(f"\n{'='*70}")
         logger.info(f"📤 Starting Publishers Job Cycle")
+        logger.info(f"   Max reports per cycle: {self.max_reports_per_run}")
+        logger.info(f"   Max concurrent publishes: {self.max_concurrent_publishes}")
         logger.info(f"{'='*70}")
         
         start_time = datetime.now()
@@ -281,13 +284,13 @@ class PublishersJob:
         reports = self.get_reports_ready_for_publishing()
         
         if not reports:
-            logger.info("📭 No reports ready for publishing")
+            logger.info(f"📭 No reports ready for publishing (max {self.max_reports_per_run} per cycle)")
             return {
                 'success': True,
                 'reports_processed': 0,
                 'reports_published': 0,
                 'duration_seconds': 0,
-                'message': 'No reports to publish'
+                'message': f'No reports to publish (max {self.max_reports_per_run} per cycle)'
             }
         
         # 2. Publish reports

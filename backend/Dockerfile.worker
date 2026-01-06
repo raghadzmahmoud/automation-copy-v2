@@ -1,5 +1,5 @@
-# 🎯 Docker for Media Worker Only
-# Images, Reels & Publishing with Arabic Support
+# 🎯 Docker for Full Pipeline Worker
+# Complete automation pipeline with Arabic Support
 
 FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
 
@@ -38,15 +38,15 @@ RUN echo "📝 Checking installed fonts..." && \
     fc-list | grep -i noto | head -5 && \
     echo "✅ Font installation complete"
 
-# Set environment variables for media worker
+# Set environment variables for full pipeline worker
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV FONTCONFIG_PATH=/etc/fonts
 ENV FC_LANG=ar
 
-# Media worker specific settings
-ENV WORKER_TYPE=media
+# Worker specific settings
+ENV WORKER_TYPE=full
 ENV CYCLE_INTERVAL=120
 ENV REEL_BATCH_SIZE=4
 ENV IMAGE_BATCH_SIZE=4
@@ -60,9 +60,9 @@ RUN mkdir -p /app/app/logs && \
 # Expose port (not really needed for worker, but good practice)
 EXPOSE 8000
 
-# Health check for media worker
+# Health check for full pipeline worker
 HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
-    CMD python -c "import arabic_reshaper, bidi; from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; print('✅ Media worker healthy')" || exit 1
+    CMD python -c "import arabic_reshaper, bidi; from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; print('✅ Full pipeline worker healthy')" || exit 1
 
-# Run the media worker only (Images, Reels, Publishing)
-CMD ["python", "test_media_worker.py", "--continuous"]
+# Run the improved worker with full pipeline
+CMD ["python", "start_worker_improved.py"]

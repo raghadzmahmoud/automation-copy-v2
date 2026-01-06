@@ -1,29 +1,31 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-🔄 Improved Task Scheduler with Parallel Execution & Timeouts
+🔄 Sequential Pipeline Scheduler with Cycle Pattern
 ═══════════════════════════════════════════════════════════════
-يشغل الـ jobs بشكل parallel مع timeout protection
-يضمن إن job واحد ما يعطل كامل الـ pipeline
+نظام دورات متتالية:
+- دورتين أساسيتين (Main Cycle) 
+- دورة واحدة للنشرة (Broadcast Cycle)
+- ثم يعيد النمط
 
-Improvements:
-✅ Parallel execution داخل كل group
-✅ Individual timeouts لكل job
-✅ Error isolation
-✅ Better monitoring
-✅ Graceful degradation
-
-Flow:
+Main Cycle (Sequential):
 ┌─────────────────────────────────────────────────────────────┐
-│  Loop كل 2 دقيقة:                                           │
-│                                                             │
-│  1. 📥 Scraping (parallel if multiple sources)             │
-│  2. 🔄 Processing: cluster → report → social (sequential)   │
-│  3. 🎨 Media: image + audio (parallel)                     │
-│  4. 📤 Publishing: social_img + reel + publish (parallel)   │
-│  5. 📻 Broadcast (single job)                              │
-│                                                             │
+│  1. 📥 Scraping (جمع الأخبار)                               │
+│  2. 🔄 Clustering (تجميع الأخبار)                          │
+│  3. 📝 Social Media Generation (توليد محتوى السوشال ميديا)   │
+│  4. 🖼️ Image Generation (توليد الصور)                      │
+│  5. 🎵 Audio Generation (توليد الصوت)                      │
+│  6. 📱 Social Media Image Generation (صور السوشال ميديا)    │
+│  7. 🎬 Reel Generation (توليد الريلز)                       │
+│  8. 📤 Publishing (النشر)                                   │
 └─────────────────────────────────────────────────────────────┘
+
+Broadcast Cycle:
+┌─────────────────────────────────────────────────────────────┐
+│  📻 Broadcast Generation (توليد النشرة والموجز)            │
+└─────────────────────────────────────────────────────────────┘
+
+Pattern: Main → Main → Broadcast → Main → Main → Broadcast...
 ═══════════════════════════════════════════════════════════════
 """
 
@@ -76,7 +78,7 @@ def import_jobs():
     global scrape_news, cluster_news, generate_reports
     global generate_social_media_content, generate_images, generate_audio
     global generate_social_media_images, generate_reels, publish_to_social_media
-    global generate_all_broadcasts, generate_bulletin_job, generate_digest_job
+    global generate_all_broadcasts
     
     # Import original functions
     from app.jobs.scraper_job import scrape_news as _scrape_news
@@ -90,10 +92,6 @@ def import_jobs():
     from app.jobs.publishers_job import publish_to_social_media as _publish_to_social_media
     from app.jobs.broadcast_job import generate_all_broadcasts as _generate_all_broadcasts
     
-    # Import bulletin/digest jobs (they exist in both files, use broadcast_job version)
-    from app.jobs.broadcast_job import generate_bulletin_job as _generate_bulletin_job
-    from app.jobs.broadcast_job import generate_digest_job as _generate_digest_job
-    
     # Wrap with timeout decorators
     scrape_news = timeout_job_by_type('scraping')(_scrape_news)
     cluster_news = timeout_job_by_type('clustering')(_cluster_news)
@@ -106,17 +104,19 @@ def import_jobs():
     publish_to_social_media = timeout_job_by_type('publishing')(_publish_to_social_media)
     generate_all_broadcasts = timeout_job_by_type('broadcast')(_generate_all_broadcasts)
     
-    # Individual broadcast jobs (for flexibility)
-    generate_bulletin_job = timeout_job_by_type('broadcast')(_generate_bulletin_job)
-    generate_digest_job = timeout_job_by_type('broadcast')(_generate_digest_job)
-    
     logger.info("✅ All jobs imported with timeout protection")
-    logger.info("📋 Available jobs:")
+    logger.info("📋 Main Cycle Jobs:")
     logger.info("   📥 scrape_news")
-    logger.info("   🔄 cluster_news, generate_reports, generate_social_media_content")
-    logger.info("   🎨 generate_images, generate_audio")
-    logger.info("   📤 generate_social_media_images, generate_reels, publish_to_social_media")
-    logger.info("   📻 generate_all_broadcasts, generate_bulletin_job, generate_digest_job")
+    logger.info("   🔄 cluster_news")
+    logger.info("   📝 generate_reports")
+    logger.info("   📱 generate_social_media_content")
+    logger.info("   🖼️ generate_images")
+    logger.info("   🎵 generate_audio")
+    logger.info("   📱 generate_social_media_images")
+    logger.info("   🎬 generate_reels")
+    logger.info("   📤 publish_to_social_media")
+    logger.info("📋 Broadcast Cycle Jobs:")
+    logger.info("   📻 generate_all_broadcasts")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -126,230 +126,231 @@ def import_jobs():
 # الفترة الأساسية بين الدورات (بالثواني)
 BASE_CYCLE_INTERVAL = int(os.getenv('CYCLE_INTERVAL', 120))  # 2 دقيقة default  
 
-# كل كم دورة يشتغل كل group
-CYCLE_CONFIG = {
-    'scraping': 1,           # كل دورة (كل 2 دق)
-    'processing': 1,         # كل دورة (كل 2 دق)
-    'media_generation': 2,   # كل دورتين (كل 4 دق)
-    'publishing': 3,         # كل 3 دورات (كل 6 دق)
-    'broadcast': 3,          # كل 3 دورات (كل 6 دق)
-}
-
-# عدد الـ workers لكل group
-WORKER_CONFIG = {
-    'scraping': 1,           # عادة source واحد
-    'processing': 1,         # sequential (dependencies)
-    'media_generation': 2,   # image + audio parallel
-    'publishing': 3,         # social_img + reel + publish parallel
-    'broadcast': 1,          # job واحد
-}
+# نمط الدورات: دورتين أساسيتين ثم دورة نشرة
+CYCLE_PATTERN = ['main', 'main', 'broadcast']  # Main → Main → Broadcast → repeat
 
 
 # ═══════════════════════════════════════════════════════════════
 # Job Execution
 # ═══════════════════════════════════════════════════════════════
 
-def run_job_group_sequential(group_name: str, jobs: list) -> Dict:
+# ═══════════════════════════════════════════════════════════════
+# Job Execution
+# ═══════════════════════════════════════════════════════════════
+
+def run_job_sequential(job_name: str, job_func) -> Dict:
     """
-    تشغيل مجموعة jobs بالترتيب (للـ dependencies)
+    تشغيل job واحد مع timeout protection
     """
-    logger.info(f"\n{'─'*60}")
-    logger.info(f"🔷 GROUP: {group_name} (Sequential)")
-    logger.info(f"{'─'*60}")
+    job_start = datetime.now()
+    logger.info(f"▶️  Starting: {job_name}")
     
-    group_start = datetime.now()
-    results = {}
-    
-    for job_name, job_func in jobs:
-        job_start = datetime.now()
-        logger.info(f"▶️  Starting: {job_name}")
+    try:
+        result = job_func()
+        duration = (datetime.now() - job_start).total_seconds()
         
-        try:
-            result = job_func()
-            duration = (datetime.now() - job_start).total_seconds()
-            
-            if result.get('skipped'):
-                logger.info(f"⏭️  {job_name}: Skipped ({result.get('reason', 'no reason')})")
-                results[job_name] = {'success': True, 'skipped': True, 'duration': duration}
-            elif result.get('error'):
-                logger.error(f"❌ {job_name}: Error - {result.get('error')}")
-                results[job_name] = {'success': False, 'error': result.get('error'), 'duration': duration}
-            else:
-                logger.info(f"✅ {job_name}: Completed in {duration:.1f}s")
-                results[job_name] = {'success': True, 'duration': duration}
-        
-        except Exception as e:
-            duration = (datetime.now() - job_start).total_seconds()
-            logger.error(f"❌ {job_name}: Exception - {e}")
-            results[job_name] = {'success': False, 'error': str(e), 'duration': duration}
-        
-        # فترة راحة قصيرة بين الـ jobs
-        time.sleep(2)
+        if result.get('skipped'):
+            logger.info(f"⏭️  {job_name}: Skipped ({result.get('reason', 'no reason')})")
+            return {'success': True, 'skipped': True, 'duration': duration}
+        elif result.get('error'):
+            logger.error(f"❌ {job_name}: Error - {result.get('error')}")
+            return {'success': False, 'error': result.get('error'), 'duration': duration}
+        else:
+            logger.info(f"✅ {job_name}: Completed in {duration:.1f}s")
+            return {'success': True, 'duration': duration}
     
-    group_duration = (datetime.now() - group_start).total_seconds()
-    logger.info(f"🔷 GROUP {group_name} completed in {group_duration:.1f}s")
-    
-    return results
+    except Exception as e:
+        duration = (datetime.now() - job_start).total_seconds()
+        logger.error(f"❌ {job_name}: Exception - {e}")
+        return {'success': False, 'error': str(e), 'duration': duration}
 
 
-def run_job_group_parallel(group_name: str, jobs: list, max_workers: int = 2) -> Dict:
+def run_main_cycle() -> Dict:
     """
-    تشغيل مجموعة jobs بشكل parallel
+    تشغيل الدورة الأساسية (Sequential Pipeline)
     """
-    logger.info(f"\n{'─'*60}")
-    logger.info(f"🔷 GROUP: {group_name} (Parallel - {max_workers} workers)")
-    logger.info(f"{'─'*60}")
+    logger.info(f"\n{'═'*70}")
+    logger.info(f"🔄 MAIN CYCLE - Sequential Pipeline")
+    logger.info(f"{'═'*70}")
     
-    # تحضير الـ jobs للـ parallel executor
-    job_configs = []
-    for job_name, job_func in jobs:
-        # احصل على الـ timeout المناسب
-        timeout = get_job_timeout(job_name.split('_')[0])  # أول كلمة من اسم الـ job
-        job_configs.append((job_name, job_func, timeout))
-    
-    # تشغيل parallel
-    parallel_results = run_jobs_parallel(job_configs, max_workers)
-    
-    # تحويل النتائج للـ format المطلوب
+    cycle_start = datetime.now()
     results = {}
-    for job_name, job_result in parallel_results.items():
-        results[job_name] = {
-            'success': job_result.success,
-            'duration': job_result.duration,
-            'error': job_result.error,
-            'timeout': job_result.timeout
+    
+    # تسلسل الـ jobs في الدورة الأساسية
+    main_jobs = [
+        ('scraping', scrape_news),
+        ('clustering', cluster_news),
+        ('reports', generate_reports),
+        ('social_media_content', generate_social_media_content),
+        ('images', generate_images),
+        ('audio', generate_audio),
+        ('social_media_images', generate_social_media_images),
+        ('reels', generate_reels),
+        ('publishing', publish_to_social_media),
+    ]
+    
+    # تشغيل كل job بالترتيب
+    for job_name, job_func in main_jobs:
+        # تشغيل الـ job
+        job_result = run_job_sequential(job_name, job_func)
+        results[job_name] = job_result
+        
+        # إذا فشل job مهم، توقف
+        if not job_result['success'] and not job_result.get('skipped'):
+            # Jobs مهمة لا يمكن تخطيها
+            critical_jobs = ['scraping', 'clustering', 'reports']
+            if job_name in critical_jobs:
+                logger.error(f"💥 Critical job {job_name} failed - stopping main cycle")
+                break
+        
+        # فترة راحة قصيرة بين الـ jobs (5 ثواني)
+        if job_name != main_jobs[-1][0]:  # ما عدا آخر job
+            logger.info(f"⏳ Waiting 5s before next job...")
+            time.sleep(5)
+    
+    cycle_duration = (datetime.now() - cycle_start).total_seconds()
+    
+    # إحصائيات الدورة الأساسية
+    successful_jobs = sum(1 for r in results.values() if r['success'])
+    total_jobs = len(results)
+    
+    logger.info(f"\n📊 Main Cycle Summary:")
+    logger.info(f"   Duration: {cycle_duration:.1f}s ({cycle_duration/60:.1f} min)")
+    logger.info(f"   Success: {successful_jobs}/{total_jobs} jobs")
+    
+    for job_name, job_result in results.items():
+        if job_result.get('skipped'):
+            status = "⏭️ SKIPPED"
+        elif job_result.get('success'):
+            status = "✅ SUCCESS"
+        else:
+            status = "❌ FAILED"
+        
+        duration = job_result.get('duration', 0)
+        logger.info(f"   {status} {job_name}: {duration:.1f}s")
+    
+    logger.info(f"{'═'*70}")
+    
+    return {
+        'type': 'main',
+        'duration': cycle_duration,
+        'results': results,
+        'stats': {
+            'total': total_jobs,
+            'successful': successful_jobs,
+            'failed': total_jobs - successful_jobs
         }
+    }
+
+
+def run_broadcast_cycle() -> Dict:
+    """
+    تشغيل دورة النشرة (Broadcast Only)
+    """
+    logger.info(f"\n{'═'*70}")
+    logger.info(f"📻 BROADCAST CYCLE - Newsletter & Digest")
+    logger.info(f"{'═'*70}")
     
-    return results
+    cycle_start = datetime.now()
+    results = {}
+    
+    # تشغيل النشرة والموجز
+    broadcast_result = run_job_sequential('broadcast', generate_all_broadcasts)
+    results['broadcast'] = broadcast_result
+    
+    cycle_duration = (datetime.now() - cycle_start).total_seconds()
+    
+    # إحصائيات دورة النشرة
+    logger.info(f"\n📊 Broadcast Cycle Summary:")
+    logger.info(f"   Duration: {cycle_duration:.1f}s ({cycle_duration/60:.1f} min)")
+    
+    if broadcast_result.get('skipped'):
+        status = "⏭️ SKIPPED"
+    elif broadcast_result.get('success'):
+        status = "✅ SUCCESS"
+    else:
+        status = "❌ FAILED"
+    
+    duration = broadcast_result.get('duration', 0)
+    logger.info(f"   {status} broadcast: {duration:.1f}s")
+    logger.info(f"{'═'*70}")
+    
+    return {
+        'type': 'broadcast',
+        'duration': cycle_duration,
+        'results': results,
+        'stats': {
+            'total': 1,
+            'successful': 1 if broadcast_result['success'] else 0,
+            'failed': 0 if broadcast_result['success'] else 1
+        }
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
 # Main Cycle
 # ═══════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════
+# Main Cycle Logic
+# ═══════════════════════════════════════════════════════════════
+
 def run_cycle(cycle_number: int) -> Dict:
     """
-    تشغيل دورة كاملة مع parallel execution
+    تشغيل دورة حسب النمط المحدد
     """
     cycle_start = datetime.now()
     
-    logger.info("\n" + "═"*70)
-    logger.info(f"🔄 IMPROVED CYCLE #{cycle_number} started at {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("═"*70)
-    
-    results = {}
-    
-    # ───────────────────────────────────────────────────────────
-    # Group 1: Data Ingestion (Scraping)
-    # Sequential (عادة source واحد)
-    # ───────────────────────────────────────────────────────────
-    if cycle_number % CYCLE_CONFIG['scraping'] == 0:
-        results['scraping'] = run_job_group_sequential('DATA INGESTION', [
-            ('scraping', scrape_news),
-        ])
-    
-    # ───────────────────────────────────────────────────────────
-    # Group 2: Processing (Cluster → Report → Social Text)
-    # Sequential (dependencies بينهم)
-    # ───────────────────────────────────────────────────────────
-    if cycle_number % CYCLE_CONFIG['processing'] == 0:
-        results['processing'] = run_job_group_sequential('PROCESSING', [
-            ('clustering', cluster_news),
-            ('reports', generate_reports),
-            ('social_media_text', generate_social_media_content),
-        ])
-    
-    # ───────────────────────────────────────────────────────────
-    # Group 3: Media Generation (Image + Audio)
-    # Parallel (مستقلين عن بعض)
-    # ───────────────────────────────────────────────────────────
-    if cycle_number % CYCLE_CONFIG['media_generation'] == 0:
-        results['media'] = run_job_group_parallel('MEDIA GENERATION', [
-            ('images', generate_images),
-            ('audio', generate_audio),
-        ], max_workers=WORKER_CONFIG['media_generation'])
-    
-    # ───────────────────────────────────────────────────────────
-    # Group 4: Publishing (Social Image + Reel + Publish)
-    # Parallel (مستقلين نسبياً)
-    # ───────────────────────────────────────────────────────────
-    if cycle_number % CYCLE_CONFIG['publishing'] == 0:
-        results['publishing'] = run_job_group_parallel('PUBLISHING', [
-            ('social_media_images', generate_social_media_images),
-            ('reels', generate_reels),
-            ('publishers', publish_to_social_media),
-        ], max_workers=WORKER_CONFIG['publishing'])
-    
-    # ───────────────────────────────────────────────────────────
-    # Group 5: Broadcast (Bulletin + Digest)
-    # Sequential (job واحد أو منفصل)
-    # ───────────────────────────────────────────────────────────
-    if cycle_number % CYCLE_CONFIG['broadcast'] == 0:
-        # يمكن تشغيل generate_all_broadcasts (الموصى به)
-        # أو تشغيل bulletin و digest منفصلين
-        broadcast_mode = os.getenv('BROADCAST_MODE', 'unified')  # unified, separate
-        
-        if broadcast_mode == 'separate':
-            results['broadcast'] = run_job_group_sequential('BROADCAST', [
-                ('bulletin', generate_bulletin_job),
-                ('digest', generate_digest_job),
-            ])
-        else:
-            # الوضع الموحد (default)
-            results['broadcast'] = run_job_group_sequential('BROADCAST', [
-                ('broadcast', generate_all_broadcasts),
-            ])
-    
-    # ───────────────────────────────────────────────────────────
-    # Summary
-    # ───────────────────────────────────────────────────────────
-    cycle_duration = (datetime.now() - cycle_start).total_seconds()
+    # تحديد نوع الدورة حسب النمط
+    pattern_index = (cycle_number - 1) % len(CYCLE_PATTERN)
+    cycle_type = CYCLE_PATTERN[pattern_index]
     
     logger.info("\n" + "═"*70)
-    logger.info(f"📊 IMPROVED CYCLE #{cycle_number} Summary")
+    logger.info(f"🔄 CYCLE #{cycle_number} ({cycle_type.upper()}) started at {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Pattern: {' → '.join(CYCLE_PATTERN)} (position {pattern_index + 1})")
     logger.info("═"*70)
-    logger.info(f"Duration: {cycle_duration:.1f}s ({cycle_duration/60:.1f} min)")
     
-    # إحصائيات مفصلة
-    total_jobs = 0
-    successful_jobs = 0
-    failed_jobs = 0
-    timeout_jobs = 0
+    # تشغيل الدورة المناسبة
+    if cycle_type == 'main':
+        result = run_main_cycle()
+    elif cycle_type == 'broadcast':
+        result = run_broadcast_cycle()
+    else:
+        logger.error(f"❌ Unknown cycle type: {cycle_type}")
+        return {
+            'cycle': cycle_number,
+            'type': cycle_type,
+            'duration': 0,
+            'error': f'Unknown cycle type: {cycle_type}'
+        }
     
-    for group_name, group_results in results.items():
-        logger.info(f"\n  {group_name}:")
-        for job_name, job_result in group_results.items():
-            total_jobs += 1
-            
-            if job_result.get('skipped'):
-                status = "⏭️"
-            elif job_result.get('timeout'):
-                status = "⏰❌"
-                timeout_jobs += 1
-            elif job_result.get('success'):
-                status = "✅"
-                successful_jobs += 1
-            else:
-                status = "❌"
-                failed_jobs += 1
-            
-            duration = job_result.get('duration', 0)
-            logger.info(f"    {status} {job_name}: {duration:.1f}s")
+    # إضافة معلومات الدورة
+    result['cycle'] = cycle_number
+    result['cycle_type'] = cycle_type
+    result['pattern_position'] = pattern_index + 1
     
-    logger.info(f"\n📈 Stats: {successful_jobs}✅ {failed_jobs}❌ {timeout_jobs}⏰ / {total_jobs} total")
+    total_duration = (datetime.now() - cycle_start).total_seconds()
+    
+    logger.info("\n" + "═"*70)
+    logger.info(f"📊 CYCLE #{cycle_number} ({cycle_type.upper()}) Summary")
+    logger.info("═"*70)
+    logger.info(f"Total Duration: {total_duration:.1f}s ({total_duration/60:.1f} min)")
+    logger.info(f"Pattern Position: {pattern_index + 1}/{len(CYCLE_PATTERN)} ({cycle_type})")
+    
+    stats = result.get('stats', {})
+    successful = stats.get('successful', 0)
+    total = stats.get('total', 0)
+    failed = stats.get('failed', 0)
+    
+    logger.info(f"Jobs: {successful}✅ {failed}❌ / {total} total")
+    
+    # عرض الـ job التالي
+    next_pattern_index = cycle_number % len(CYCLE_PATTERN)
+    next_cycle_type = CYCLE_PATTERN[next_pattern_index]
+    logger.info(f"Next Cycle: #{cycle_number + 1} ({next_cycle_type.upper()})")
     logger.info("═"*70 + "\n")
     
-    return {
-        'cycle': cycle_number,
-        'duration': cycle_duration,
-        'results': results,
-        'stats': {
-            'total': total_jobs,
-            'successful': successful_jobs,
-            'failed': failed_jobs,
-            'timeout': timeout_jobs
-        }
-    }
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -372,11 +373,11 @@ def main():
     global running
     
     logger.info("═"*70)
-    logger.info("🚀 Improved Task Scheduler Starting")
-    logger.info("   ✅ Parallel execution enabled")
+    logger.info("🚀 Sequential Pipeline Scheduler Starting")
+    logger.info("   ✅ Sequential job execution")
     logger.info("   ✅ Individual job timeouts")
+    logger.info("   ✅ Cycle pattern system")
     logger.info("   ✅ Error isolation")
-    logger.info("   ✅ Better monitoring")
     logger.info("═"*70)
     logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
     
@@ -394,12 +395,24 @@ def main():
     
     logger.info(f"Base cycle interval: {BASE_CYCLE_INTERVAL}s ({BASE_CYCLE_INTERVAL//60} min)")
     logger.info("")
-    logger.info("Schedule & Workers:")
-    logger.info(f"  📥 Scraping:    every {CYCLE_CONFIG['scraping']} cycle(s) - {WORKER_CONFIG['scraping']} worker(s)")
-    logger.info(f"  🔄 Processing:  every {CYCLE_CONFIG['processing']} cycle(s) - {WORKER_CONFIG['processing']} worker(s)")
-    logger.info(f"  🎨 Media:       every {CYCLE_CONFIG['media_generation']} cycle(s) - {WORKER_CONFIG['media_generation']} worker(s)")
-    logger.info(f"  📤 Publishing:  every {CYCLE_CONFIG['publishing']} cycle(s) - {WORKER_CONFIG['publishing']} worker(s)")
-    logger.info(f"  📻 Broadcast:   every {CYCLE_CONFIG['broadcast']} cycle(s) - {WORKER_CONFIG['broadcast']} worker(s)")
+    logger.info("Cycle Pattern:")
+    for i, cycle_type in enumerate(CYCLE_PATTERN, 1):
+        logger.info(f"  {i}. {cycle_type.upper()} Cycle")
+    logger.info(f"  Pattern repeats every {len(CYCLE_PATTERN)} cycles")
+    logger.info("")
+    logger.info("Main Cycle Jobs (Sequential):")
+    logger.info("  1. 📥 Scraping")
+    logger.info("  2. 🔄 Clustering") 
+    logger.info("  3. 📝 Reports Generation")
+    logger.info("  4. 📱 Social Media Content")
+    logger.info("  5. 🖼️ Image Generation")
+    logger.info("  6. 🎵 Audio Generation")
+    logger.info("  7. 📱 Social Media Images")
+    logger.info("  8. 🎬 Reel Generation")
+    logger.info("  9. 📤 Publishing")
+    logger.info("")
+    logger.info("Broadcast Cycle Jobs:")
+    logger.info("  1. 📻 Newsletter & Digest Generation")
     logger.info("═"*70)
     
     # Setup signal handlers
@@ -424,9 +437,16 @@ def main():
             cycle_result = run_cycle(cycle_number)
             
             # Log performance metrics
-            stats = cycle_result['stats']
-            if stats['timeout'] > 0:
-                logger.warning(f"⚠️  {stats['timeout']} jobs timed out in cycle #{cycle_number}")
+            if 'error' in cycle_result:
+                logger.error(f"❌ Cycle #{cycle_number} failed: {cycle_result['error']}")
+            else:
+                stats = cycle_result.get('stats', {})
+                cycle_type = cycle_result.get('cycle_type', 'unknown')
+                
+                if stats.get('failed', 0) > 0:
+                    logger.warning(f"⚠️  {stats['failed']} jobs failed in {cycle_type} cycle #{cycle_number}")
+                else:
+                    logger.info(f"✅ {cycle_type.title()} cycle #{cycle_number} completed successfully")
             
             if not running:
                 break
@@ -456,7 +476,7 @@ def main():
                 time.sleep(1)
     
     logger.info("\n" + "═"*70)
-    logger.info("🛑 Improved Scheduler stopped gracefully")
+    logger.info("🛑 Sequential Pipeline Scheduler stopped gracefully")
     logger.info("═"*70)
 
 

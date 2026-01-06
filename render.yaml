@@ -1,13 +1,18 @@
 # ═══════════════════════════════════════════════════════════════
-# 🚀 Render Configuration - Sequential Background Worker
+# 🚀 Render Configuration - Sequential Pipeline with Cycle Pattern
+# ═══════════════════════════════════════════════════════════════
+# 
+# Cycle Pattern: Main → Main → Broadcast → repeat
+# Main Cycle: Scraping → Clustering → Reports → Social → Images → Audio → Social Images → Reels → Publishing
+# Broadcast Cycle: Newsletter & Digest Generation
 # ═══════════════════════════════════════════════════════════════
 
 services:
   # ═══════════════════════════════════════════════════════════
-  # 🎯 Media Worker Service (Images, Reels, Publishing)
+  # 🎯 Full Pipeline Worker Service (Complete Automation)
   # ═══════════════════════════════════════════════════════════
   - type: worker
-    name: media-automation-worker
+    name: automation-pipeline-worker
     
     # ⚠️ مهم: env مش runtime
     env: docker
@@ -65,10 +70,10 @@ services:
         sync: false
       
       # ═══════════════════════════════════════════════════════════
-      # 🎯 Media Worker Configuration (Images, Reels, Publishing)
+      # 🎯 Full Pipeline Worker Configuration
       # ═══════════════════════════════════════════════════════════
       - key: WORKER_TYPE
-        value: media
+        value: full
       - key: MAX_PARALLEL_JOBS
         value: "3"
       - key: DEFAULT_JOB_TIMEOUT
@@ -84,6 +89,12 @@ services:
       - key: REEL_BATCH_SIZE
         value: "4"
       - key: IMAGE_BATCH_SIZE
+        value: "4"
+      - key: MAX_REPORTS_PER_PUBLISH
+        value: "3"
+      - key: MAX_SOCIAL_IMAGES_PER_RUN
+        value: "4"
+      - key: MAX_REELS_PER_RUN
         value: "4"
       
       # Font and Arabic support

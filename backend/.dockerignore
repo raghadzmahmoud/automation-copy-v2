@@ -54,14 +54,10 @@ temp/
 README.md
 *.md
 
-# Test files
+# Test files (all removed for production)
 test_*.py
 *_test.py
 tests/
-
-# Exception: Keep media worker and Arabic test
-!test_media_worker.py
-!test_arabic_direction.py
 
 # Development files
 .env.example
