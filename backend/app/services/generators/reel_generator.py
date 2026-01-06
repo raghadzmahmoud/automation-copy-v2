@@ -483,8 +483,17 @@ class ReelGenerator:
                 from moviepy.editor import concatenate_videoclips
                 combined_image_clip = concatenate_videoclips(image_clips, method="compose")
                 
-                # Use slideshow without text overlays
-                video_clip = combined_image_clip
+                # Add text overlays if text content is provided
+                if text_content:
+                    print(f"   📝 Adding text overlays to video...")
+                    text_clips = self._create_text_overlays(text_content, audio_duration, audio_path)
+                    if text_clips:
+                        # Composite slideshow with text overlays
+                        video_clip = CompositeVideoClip([combined_image_clip] + text_clips)
+                    else:
+                        video_clip = combined_image_clip
+                else:
+                    video_clip = combined_image_clip
                 
                 # Combine video with audio
                 video_clip = video_clip.set_audio(audio_clip)
