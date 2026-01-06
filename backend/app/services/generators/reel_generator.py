@@ -269,7 +269,7 @@ class ReelGenerator:
                         else:
                             print(f"   ⚠️  Failed to generate temporary audio, using trimmed original")
             
-            # Get text content for subtitles
+            # Get text content for comment/description (not for video overlay)
             text_content = None
             if audio_content and audio_content.get('content'):
                 text_content = audio_content['content']
@@ -285,12 +285,11 @@ class ReelGenerator:
                     if summarized_text:
                         text_content = summarized_text
             
-            # Generate the reel with multiple images
+            # Generate the reel with multiple images (without text overlays)
             generation_result = self._create_reel(
                 image_paths=image_paths,
                 audio_path=audio_path,
-                report_id=report_id,
-                text_content=text_content
+                report_id=report_id
             )
             
             if not generation_result.success:
@@ -410,7 +409,6 @@ class ReelGenerator:
         image_paths: List[str],
         audio_path: str,
         report_id: int,
-        text_content: Optional[str] = None,
         retries: int = 2
     ) -> ReelGenerationResult:
         """Create a vertical video reel from multiple images and audio"""
@@ -485,17 +483,8 @@ class ReelGenerator:
                 from moviepy.editor import concatenate_videoclips
                 combined_image_clip = concatenate_videoclips(image_clips, method="compose")
                 
-                # Add text overlays if text content is provided
-                if text_content:
-                    print(f"   📝 Adding text overlays to video...")
-                    text_clips = self._create_text_overlays(text_content, audio_duration, audio_path)
-                    if text_clips:
-                        # Composite slideshow with text overlays
-                        video_clip = CompositeVideoClip([combined_image_clip] + text_clips)
-                    else:
-                        video_clip = combined_image_clip
-                else:
-                    video_clip = combined_image_clip
+                # Use slideshow without text overlays
+                video_clip = combined_image_clip
                 
                 # Combine video with audio
                 video_clip = video_clip.set_audio(audio_clip)
