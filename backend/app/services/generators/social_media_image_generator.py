@@ -496,11 +496,12 @@ class SocialImageGenerator:
         return logo.resize((int(w*scale), int(h*scale)), Image.Resampling.LANCZOS)
     
     def _create_image(self, bg: Image.Image, logo: Image.Image, title: str) -> Image.Image:
-        """Create"""
+        """Create final image - without text overlay"""
         bg = self._resize_to_fit(bg)
         bg = self._enhance_image(bg)
         bg = self._add_logo(bg, logo)
-        bg = self._add_title_with_box(bg, title)
+        # النص معطل - صورة بدون كتابة
+        # bg = self._add_title_with_box(bg, title)
         return bg
     
     def _resize_to_fit(self, img: Image.Image) -> Image.Image:
@@ -646,30 +647,6 @@ class SocialImageGenerator:
             try:
                 bbox = draw.textbbox((0, 0), line, font=font)
                 lw = bbox[2] - bbox[0]
-                
-                # محاذاة النص في المنتصف (مناسب للعربية والإنجليزية)
-                x = (img.size[0] - lw) // 2
-                
-                # Shadow أوضح
-                draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 220))
-                # النص الأساسي
-                draw.text((x, y), line, font=font, fill='white')
-                
-                print(f"   ✅ Drew line at ({x}, {y}): '{line}'")
-                y += lh
-                
-            except Exception as e:
-                print(f"   ⚠️  Error drawing line '{line}': {e}")
-                # محاولة رسم بسيطة كـ fallback
-                try:
-                    x = (img.size[0] - 200) // 2  # تقدير تقريبي
-                    draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 220))
-                    draw.text((x, y), line, font=font, fill='white')
-                    y += lh
-                except:
-                    print(f"   ❌ Complete failure drawing line: {line}")
-        
-        return img
                 
                 # محاذاة النص في المنتصف (مناسب للعربية والإنجليزية)
                 x = (img.size[0] - lw) // 2
