@@ -496,7 +496,7 @@ class SocialImageGenerator:
         return logo.resize((int(w*scale), int(h*scale)), Image.Resampling.LANCZOS)
     
     def _create_image(self, bg: Image.Image, logo: Image.Image, title: str) -> Image.Image:
-        """Create final image - without text overlay"""
+        """Create - background with logo only, no text"""
         bg = self._resize_to_fit(bg)
         bg = self._enhance_image(bg)
         bg = self._add_logo(bg, logo)
