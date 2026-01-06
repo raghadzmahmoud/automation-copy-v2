@@ -11,7 +11,7 @@ from typing import Dict, Optional
 from fastapi import UploadFile
 from moviepy.editor import VideoFileClip
 from io import BytesIO
-from app.services.processing.audio_input_processor import AudioInputProcessor
+from app.services.processing.audio_input_processor_v2 import AudioInputProcessorV2
 
 class VideoInputProcessor:
     def __init__(self):
@@ -19,8 +19,8 @@ class VideoInputProcessor:
         print("🎥 Initializing Enhanced Video Input Processor")
         print("=" * 60)
         try:
-            self.audio_processor = AudioInputProcessor()
-            print("✅ AudioInputProcessor ready")
+            self.audio_processor = AudioInputProcessorV2()
+            print("✅ AudioInputProcessor V2 ready")
         except Exception as e:
             print(f"❌ Initialization failed: {e}")
             raise

@@ -95,11 +95,17 @@ class AudioInputProcessorV2:
             # Step 3: Save metadata
             # ========================================
             print("\n💾 Step 3: Saving metadata...")
+            
+            # Get WAV file size
+            wav_file.file.seek(0, 2)  # Seek to end
+            wav_size = wav_file.file.tell()
+            wav_file.file.seek(0)  # Reset
+            
             uploaded_file_id = self._save_metadata(
                 original_filename=original_filename,
                 stored_filename=upload_result['s3_key'].split('/')[-1],
                 file_path=audio_url,
-                file_size=wav_file.file.tell(),
+                file_size=wav_size,
                 mime_type='audio/wav'
             )
             
