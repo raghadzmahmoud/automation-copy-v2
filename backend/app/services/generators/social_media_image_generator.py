@@ -500,7 +500,7 @@ class SocialImageGenerator:
         bg = self._resize_to_fit(bg)
         bg = self._enhance_image(bg)
         bg = self._add_logo(bg, logo)
-        # Removed: bg = self._add_title_with_box(bg, title)
+        bg = self._add_title_with_box(bg, title)
         return bg
     
     def _resize_to_fit(self, img: Image.Image) -> Image.Image:
