@@ -148,10 +148,13 @@ class AudioInputProcessor:
             # Extract stored filename from s3_key
             stored_filename = s3_key.split('/')[-1]
             
-            # Detect mime_type from filename
-            mime_type = self._detect_mime_type(file.filename)
+            # Detect mime_type from file.content_type (preferred) or filename (fallback)
+            mime_type = file.content_type if file.content_type else self._detect_mime_type(file.filename)
             
             print(f"✅ Uploaded: {audio_url}")
+            print(f"📋 MIME Type: {mime_type}")
+            print(f"📋 Original Filename: {file.filename}")
+            print(f"📋 Content Type: {file.content_type}")
             
             # ========================================
             # Step 2: حفظ metadata في uploaded_files
@@ -426,21 +429,39 @@ class AudioInputProcessor:
                 wav_data = self.audio_converter.convert_to_wav(audio_url)
                 
                 if not wav_data:
-                    return {'success': False, 'error': 'Conversion failed'}
+                    print(f"   ❌ Conversion failed for {mime_type}")
+                    return {'success': False, 'error': 'Audio conversion failed'}
+                
+                print(f"   ✅ Conversion successful")
                 
                 # Upload converted
                 from fastapi import UploadFile
                 wav_file = UploadFile(filename='converted.wav', file=wav_data)
                 upload_result = self._upload_to_s3(wav_file, file_type='audio')
                 
+                if not upload_result.get('success'):
+                    print(f"   ❌ Failed to upload converted audio")
+                    return {'success': False, 'error': 'Failed to upload converted audio'}
+                
                 # Use converted URL
                 audio_url = upload_result['url']
+                print(f"   ✅ Converted audio uploaded: {audio_url}")
             
             # Transcribe (original or converted)
+            print(f"   🎙️ Transcribing audio from: {audio_url}")
             result = self.stt_service.transcribe_audio(audio_url)
+            
+            if result.get('success'):
+                print(f"   ✅ Transcription successful")
+            else:
+                print(f"   ❌ Transcription failed: {result.get('error')}")
+            
             return result
             
         except Exception as e:
+            print(f"   ❌ Exception in _transcribe_audio: {e}")
+            import traceback
+            traceback.print_exc()
             return {'success': False, 'error': str(e)}
     
     def _refine_text(self, raw_text: str) -> Dict:
