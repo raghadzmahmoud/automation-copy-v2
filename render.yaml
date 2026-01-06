@@ -92,6 +92,8 @@ services:
         value: "4"
       - key: MAX_REPORTS_PER_PUBLISH
         value: "3"
+      - key: MAX_SOCIAL_MEDIA_REPORTS
+        value: "1"
       - key: MAX_SOCIAL_IMAGES_PER_RUN
         value: "4"
       - key: MAX_REELS_PER_RUN
