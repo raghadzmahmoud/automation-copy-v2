@@ -15,6 +15,7 @@ from fastapi import UploadFile
 
 # Import our services
 from app.utils.s3_uploader import S3Uploader
+from app.utils.audio_converter import AudioConverter
 from app.services.generators.stt_service import STTService
 from app.services.processing.news_refiner import NewsRefiner
 from app.services.processing.classifier import classify_with_gemini
@@ -52,6 +53,13 @@ class AudioInputProcessor:
             print("✅ S3Uploader ready")
         except Exception as e:
             print(f"❌ S3Uploader failed: {e}")
+            raise
+        
+        try:
+            self.audio_converter = AudioConverter()
+            print("✅ AudioConverter ready")
+        except Exception as e:
+            print(f"❌ AudioConverter failed: {e}")
             raise
         
         try:
