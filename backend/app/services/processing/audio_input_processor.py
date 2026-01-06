@@ -133,6 +133,65 @@ class AudioInputProcessor:
             # Step 1: رفع الملف على S3
             # ========================================
             print("\n📤 Step 1: Uploading to S3...")
+            
+            # Check if audio needs conversion before upload
+            if mime_type and self.audio_converter.needs_conversion(mime_type):
+                print(f"   🔄 Converting {mime_type} to WAV before upload...")
+                
+                # Read file content
+                file.file.seek(0)
+                file_content = file.file.read()
+                file.file.seek(0)
+                
+                # Save to temp file
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+                    temp_file.write(file_content)
+                    temp_path = temp_file.name
+                
+                # Convert to WAV
+                try:
+                    import subprocess
+                    wav_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                    wav_path = wav_temp.name
+                    wav_temp.close()
+                    
+                    cmd = [
+                        self.audio_converter.ffmpeg_path,
+                        '-i', temp_path,
+                        '-ar', '16000',        # 16kHz
+                        '-ac', '1',            # mono
+                        '-acodec', 'pcm_s16le',  # LINEAR16
+                        '-y',
+                        wav_path
+                    ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, timeout=60)
+                    
+                    if result.returncode == 0:
+                        # Read converted WAV
+                        with open(wav_path, 'rb') as f:
+                            wav_content = f.read()
+                        
+                        # Update file object
+                        from io import BytesIO
+                        file.file = BytesIO(wav_content)
+                        file.filename = file.filename.rsplit('.', 1)[0] + '.wav'
+                        mime_type = 'audio/wav'
+                        file_size = len(wav_content)
+                        
+                        print(f"   ✅ Converted to WAV: {len(wav_content)} bytes")
+                    else:
+                        print(f"   ⚠️  Conversion failed, uploading original")
+                    
+                    # Cleanup
+                    import os
+                    os.unlink(temp_path)
+                    os.unlink(wav_path)
+                    
+                except Exception as e:
+                    print(f"   ⚠️  Conversion error: {e}, uploading original")
+            
             upload_result = self._upload_to_s3(file)
             
             if not upload_result['success']:
@@ -182,14 +241,24 @@ class AudioInputProcessor:
             # Step 3: تحويل الصوت إلى نص (STT)
             # ========================================
             print("\n🎙️ Step 3: Speech-to-Text...")
-            stt_result = self._transcribe_audio(audio_url, mime_type) 
+            print(f"   📋 Audio URL: {audio_url}")
+            print(f"   📋 MIME Type: {mime_type}")
+            
+            # Call STT without mime_type (same as video processor)
+            # The STT service will detect format from URL extension
+            stt_result = self._transcribe_audio(audio_url)
             
             if not stt_result['success']:
-                # Update status
-                self._update_uploaded_file_status(uploaded_file_id, 'failed')
+                # Update status with error details
+                error_msg = stt_result.get('error', 'Unknown STT error')
+                print(f"❌ STT Failed: {error_msg}")
+                
+                # Save error to metadata
+                self._update_uploaded_file_error(uploaded_file_id, 'failed', error_msg)
+                
                 return {
                     'success': False,
-                    'error': f"فشل STT: {stt_result.get('error')}",
+                    'error': f"فشل STT: {error_msg}",
                     'step': 'stt',
                     'uploaded_file_id': uploaded_file_id
                 }
@@ -208,10 +277,12 @@ class AudioInputProcessor:
             refine_result = self._refine_text(transcription)
             
             if not refine_result['success']:
-                self._update_uploaded_file_status(uploaded_file_id, 'failed')
+                error_msg = refine_result.get('error', 'Unknown refiner error')
+                print(f"❌ Refiner Failed: {error_msg}")
+                self._update_uploaded_file_error(uploaded_file_id, 'failed', error_msg)
                 return {
                     'success': False,
-                    'error': f"فشل Refiner: {refine_result.get('error')}",
+                    'error': f"فشل Refiner: {error_msg}",
                     'step': 'refiner',
                     'uploaded_file_id': uploaded_file_id
                 }
@@ -413,6 +484,43 @@ class AudioInputProcessor:
             
         except Exception as e:
             print(f"⚠️  Error updating status: {e}")
+            self.conn.rollback()
+    
+    def _update_uploaded_file_error(self, uploaded_file_id: int, status: str, error_message: str):
+        """تحديث حالة المعالجة مع رسالة الخطأ"""
+        try:
+            import json
+            
+            # Get current metadata
+            query = "SELECT metadata FROM uploaded_files WHERE id = %s"
+            self.cursor.execute(query, (uploaded_file_id,))
+            result = self.cursor.fetchone()
+            
+            metadata = {}
+            if result and result[0]:
+                metadata = result[0] if isinstance(result[0], dict) else json.loads(result[0])
+            
+            # Add error to metadata
+            metadata['error'] = error_message
+            metadata['error_timestamp'] = datetime.now().isoformat()
+            
+            # Update with error
+            query = """
+                UPDATE uploaded_files
+                SET processing_status = %s,
+                    metadata = %s::jsonb,
+                    processed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+            """
+            
+            self.cursor.execute(query, (status, json.dumps(metadata), uploaded_file_id))
+            self.conn.commit()
+            
+            print(f"   💾 Error saved to metadata: {error_message}")
+            
+        except Exception as e:
+            print(f"⚠️  Error updating status with error: {e}")
             self.conn.rollback()
     
     def _transcribe_audio(self, audio_url: str, mime_type: str = None) -> Dict:
