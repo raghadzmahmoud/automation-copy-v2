@@ -27,8 +27,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from settings import DB_CONFIG
-from app.services.publishers.facebook_publisher import FacebookPublisher
-from app.services.publishers.instagram_publisher import InstagramPublisher
+# DISABLED: Facebook and Instagram publishers temporarily disabled
+# from app.services.publishers.facebook_publisher import FacebookPublisher
+# from app.services.publishers.instagram_publisher import InstagramPublisher
 from app.services.publishers.publish_telegram import TelegramPublisher
 
 logger = logging.getLogger(__name__)
@@ -161,16 +162,17 @@ class PublishersJob:
         # Initialize publishers
         self.publishers = {}
         
-        # Facebook Publisher
-        try:
-            self.publishers['facebook'] = FacebookPublisher()
-            logger.info("✅ Facebook Publisher initialized")
-        except Exception as e:
-            logger.error(f"❌ Facebook Publisher failed: {e}")
-            self.publishers['facebook'] = None
+        # DISABLED: Facebook Publisher temporarily disabled
+        # try:
+        #     self.publishers['facebook'] = FacebookPublisher()
+        #     logger.info("✅ Facebook Publisher initialized")
+        # except Exception as e:
+        #     logger.error(f"❌ Facebook Publisher failed: {e}")
+        #     self.publishers['facebook'] = None
+        logger.info("⚠️  Facebook Publisher disabled - not initializing")
+        self.publishers['facebook'] = None
         
-        # Instagram Publisher - DISABLED
-        # Instagram publishing is temporarily disabled
+        # DISABLED: Instagram Publisher temporarily disabled
         # try:
         #     self.publishers['instagram'] = InstagramPublisher()
         #     logger.info("✅ Instagram Publisher initialized")
@@ -180,7 +182,7 @@ class PublishersJob:
         logger.info("⚠️  Instagram Publisher disabled - not initializing")
         self.publishers['instagram'] = None
         
-        # Telegram Publisher
+        # Telegram Publisher - ACTIVE
         try:
             self.publishers['telegram'] = TelegramPublisher()
             logger.info("✅ Telegram Publisher initialized")
@@ -331,8 +333,9 @@ class PublishersJob:
         self._update_report_status(report_id, 'publishing')
         
         # Publish to each platform
-        # DISABLED: Instagram publishing temporarily disabled
-        platforms_to_publish = ['facebook', 'telegram']  # 'instagram' removed
+        # DISABLED: Facebook and Instagram publishing temporarily disabled
+        # Only Telegram is active
+        platforms_to_publish = ['telegram']  # 'facebook' and 'instagram' removed
         
         for platform in platforms_to_publish:
             publisher = self.publishers.get(platform)
@@ -644,26 +647,29 @@ class PublishersJob:
         all_results = []
         
         # ═══════════════════════════════════════════════════════════
-        # 1. نشر على Social Media (Facebook) - 1 تقرير فقط
+        # 1. DISABLED: Social Media Publishing (Facebook) 
         # ═══════════════════════════════════════════════════════════
         logger.info(f"\n{'─'*70}")
-        logger.info(f"📘 Phase 1: Social Media Publishing")
+        logger.info(f"📘 Phase 1: Social Media Publishing - DISABLED")
         logger.info(f"{'─'*70}")
+        logger.info("⚠️  Facebook/Instagram publishing is temporarily disabled")
         
-        social_reports = self.get_reports_ready_for_publishing('social_media')
-        
-        if social_reports:
-            logger.info(f"📊 Publishing {len(social_reports)} report(s) to Social Media...")
-            
-            for report_id, status, created_at in social_reports:
-                result = self.publish_to_social_media_only(report_id, status)
-                all_results.append(result)
-                
-                # تأخير بين التقارير لتجنب rate limiting
-                if len(social_reports) > 1:
-                    time.sleep(60)  # دقيقة بين كل تقرير
-        else:
-            logger.info("📭 No reports for Social Media")
+        # DISABLED: Social Media publishing
+        # social_reports = self.get_reports_ready_for_publishing('social_media')
+        # 
+        # if social_reports:
+        #     logger.info(f"📊 Publishing {len(social_reports)} report(s) to Social Media...")
+        #     
+        #     for report_id, status, created_at in social_reports:
+        #         result = self.publish_to_social_media_only(report_id, status)
+        #         all_results.append(result)
+        #         
+        #         # تأخير بين التقارير لتجنب rate limiting
+        #         if len(social_reports) > 1:
+        #             time.sleep(60)  # دقيقة بين كل تقرير
+        # else:
+        #     logger.info("📭 No reports for Social Media")
+        social_reports = []  # Empty - disabled
         
         # ═══════════════════════════════════════════════════════════
         # 2. نشر على Telegram - 3 تقارير

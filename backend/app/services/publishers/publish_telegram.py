@@ -39,8 +39,18 @@ class TelegramPublisher:
         self.CHAT_ID = chat_id or os.getenv('TG_CHAT_ID') 
         self.API_BASE_URL = (api_base_url or os.getenv('API_BASE_URL') or "http://localhost:8000").rstrip('/')
         
-        print(f"✅ Telegram Bot: {self.BOT_TOKEN[:20]}...")
-        print(f"✅ Chat ID: {self.CHAT_ID}")
+        # Validate required config
+        if not self.BOT_TOKEN:
+            print("❌ TG_BOT_TOKEN not configured!")
+        else:
+            print(f"✅ Telegram Bot Token: {self.BOT_TOKEN[:20]}...")
+        
+        if not self.CHAT_ID:
+            print("❌ TG_CHAT_ID not configured!")
+        else:
+            print(f"✅ Telegram Chat ID: {self.CHAT_ID}")
+        
+        print(f"✅ API Base URL: {self.API_BASE_URL}")
         
         # Database
         try:
@@ -78,6 +88,13 @@ class TelegramPublisher:
         print(f"\n{'='*70}")
         print(f"📱 Telegram Publishing - Report #{report_id}")
         print(f"{'='*70}\n")
+        
+        # Validate configuration
+        if not self.BOT_TOKEN:
+            return {'success': False, 'message': 'TG_BOT_TOKEN not configured'}
+        
+        if not self.CHAT_ID:
+            return {'success': False, 'message': 'TG_CHAT_ID not configured'}
         
         self._update_report_status(report_id, 'publishing')
         
@@ -160,17 +177,19 @@ class TelegramPublisher:
             response = requests.get(url, timeout=10)
             
             if response.status_code != 200:
+                print(f"   ⚠️  Generated image API returned: {response.status_code}")
                 return None
             
             data = response.json()
             image_url = data.get('file_url')
             
             if image_url:
-                print("   ✅ Using Generated Image")
+                print(f"   ✅ Using Generated Image: {image_url[:50]}...")
                 return image_url
             
             return None
-        except:
+        except Exception as e:
+            print(f"   ❌ Error getting generated image: {e}")
             return None
     
     def _get_original_image_url(self, report_id: int) -> Optional[str]:
@@ -180,23 +199,25 @@ class TelegramPublisher:
             response = requests.get(url, timeout=10)
             
             if response.status_code != 200:
+                print(f"   ❌ API error: {response.status_code}")
                 return None
             
             data = response.json()
             
-            if isinstance(data, list) and len(data) > 0:
-                image_url = data[0].get('url') or data[0].get('image_url')
-            elif isinstance(data, dict):
-                image_url = data.get('url') or data.get('image_url')
-            else:
-                return None
+            # Response format: {"report_id": 123, "images": [{"news_id": 1, "title": "...", "img_url": "..."}]}
+            images = data.get('images', [])
             
-            if image_url:
-                print("   ✅ Using Original Image")
-                return image_url
+            if isinstance(images, list) and len(images) > 0:
+                # Try different possible keys for image URL
+                image_url = images[0].get('img_url') or images[0].get('url') or images[0].get('image_url')
+                if image_url:
+                    print(f"   ✅ Using Original Image: {image_url[:50]}...")
+                    return image_url
             
+            print("   ⚠️  No images found in response")
             return None
-        except:
+        except Exception as e:
+            print(f"   ❌ Error getting original image: {e}")
             return None
     
     def _send_photo(self, photo_url: str, caption: str) -> Dict:
