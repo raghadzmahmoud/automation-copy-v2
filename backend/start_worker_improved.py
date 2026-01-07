@@ -4,9 +4,9 @@
 🔄 Sequential Pipeline Scheduler with Cycle Pattern
 ═══════════════════════════════════════════════════════════════
 نظام دورات متتالية:
-- دورتين أساسيتين (Main Cycle) 
+- دورتين أساسيتين (Main Cycle) - تشمل Telegram
 - دورة واحدة للنشرة (Broadcast Cycle)
-- ثم يعيد النمط
+- دورة واحدة للسوشال ميديا (Social Media Cycle) - Facebook + Instagram
 
 Main Cycle (Sequential):
 ┌─────────────────────────────────────────────────────────────┐
@@ -17,7 +17,7 @@ Main Cycle (Sequential):
 │  5. 🎵 Audio Generation (توليد الصوت)                      │
 │  6. 📱 Social Media Image Generation (صور السوشال ميديا)    │
 │  7. 🎬 Reel Generation (توليد الريلز)                       │
-│  8. 📤 Publishing (النشر)                                   │
+│  8. 📱 Telegram Publishing (النشر على تيليجرام)             │
 └─────────────────────────────────────────────────────────────┘
 
 Broadcast Cycle:
@@ -25,7 +25,13 @@ Broadcast Cycle:
 │  📻 Broadcast Generation (توليد النشرة والموجز)            │
 └─────────────────────────────────────────────────────────────┘
 
-Pattern: Main → Main → Broadcast → Main → Main → Broadcast...
+Social Media Cycle:
+┌─────────────────────────────────────────────────────────────┐
+│  📘 Facebook Publishing (النشر على فيسبوك)                  │
+│  📸 Instagram Publishing (النشر على انستغرام)               │
+└─────────────────────────────────────────────────────────────┘
+
+Pattern: Broadcast → Main → Main → Social Media → Main → Main → Broadcast...
 ═══════════════════════════════════════════════════════════════
 """
 
@@ -77,7 +83,8 @@ def import_jobs():
     """Import all job functions with timeout decorators"""
     global scrape_news, cluster_news, generate_reports
     global generate_social_media_content, generate_images, generate_audio
-    global generate_social_media_images, generate_reels, publish_to_social_media
+    global generate_social_media_images, generate_reels
+    global run_telegram_cycle, run_facebook_cycle, run_instagram_cycle
     global generate_all_broadcasts, run_audio_transcription_job
     
     # Import original functions
@@ -89,7 +96,9 @@ def import_jobs():
     from app.jobs.audio_generation_job import generate_audio as _generate_audio
     from app.jobs.social_media_image_job import generate_social_media_images as _generate_social_media_images
     from app.jobs.reel_generation_job import generate_reels as _generate_reels
-    from app.jobs.publishers_job import publish_to_social_media as _publish_to_social_media
+    from app.jobs.publishers_job import run_telegram_cycle as _run_telegram_cycle
+    from app.jobs.publishers_job import run_facebook_cycle as _run_facebook_cycle
+    from app.jobs.publishers_job import run_instagram_cycle as _run_instagram_cycle
     from app.jobs.broadcast_job import generate_all_broadcasts as _generate_all_broadcasts
     from app.jobs.audio_transcription_job import run_audio_transcription_job as _run_audio_transcription_job
     
@@ -102,7 +111,9 @@ def import_jobs():
     generate_audio = timeout_job_by_type('audio')(_generate_audio)
     generate_social_media_images = timeout_job_by_type('images')(_generate_social_media_images)
     generate_reels = timeout_job_by_type('video')(_generate_reels)
-    publish_to_social_media = timeout_job_by_type('publishing')(_publish_to_social_media)
+    run_telegram_cycle = timeout_job_by_type('publishing')(_run_telegram_cycle)
+    run_facebook_cycle = timeout_job_by_type('publishing')(_run_facebook_cycle)
+    run_instagram_cycle = timeout_job_by_type('publishing')(_run_instagram_cycle)
     generate_all_broadcasts = timeout_job_by_type('broadcast')(_generate_all_broadcasts)
     run_audio_transcription_job = timeout_job_by_type('audio')(_run_audio_transcription_job)
     
@@ -117,9 +128,12 @@ def import_jobs():
     logger.info("   🎵 generate_audio")
     logger.info("   📱 generate_social_media_images")
     logger.info("   🎬 generate_reels")
-    logger.info("   📤 publish_to_social_media")
+    logger.info("   📱 telegram_publishing")
     logger.info("📋 Broadcast Cycle Jobs:")
     logger.info("   📻 generate_all_broadcasts")
+    logger.info("📋 Social Media Cycle Jobs:")
+    logger.info("   📘 facebook_publishing")
+    logger.info("   📸 instagram_publishing")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -129,8 +143,8 @@ def import_jobs():
 # الفترة الأساسية بين الدورات (بالثواني)
 BASE_CYCLE_INTERVAL = int(os.getenv('CYCLE_INTERVAL', 120))  # 2 دقيقة default  
 
-# نمط الدورات: نشرة أولاً ثم دورتين أساسيتين
-CYCLE_PATTERN = ['broadcast', 'main', 'main']  # Broadcast → Main → Main → repeat
+# نمط الدورات: نشرة أولاً ثم دورتين أساسيتين ثم سوشال ميديا
+CYCLE_PATTERN = ['broadcast', 'main', 'main', 'social_media']  # Broadcast → Main → Main → Social Media → Main → Main → repeat
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -190,7 +204,7 @@ def run_main_cycle() -> Dict:
         ('audio', generate_audio),
         ('social_media_images', generate_social_media_images),
         ('reels', generate_reels),
-        ('publishing', publish_to_social_media),
+        ('telegram_publishing', run_telegram_cycle),
     ]
     
     # تشغيل كل job بالترتيب
@@ -291,6 +305,86 @@ def run_broadcast_cycle() -> Dict:
     }
 
 
+def run_social_media_cycle() -> Dict:
+    """
+    تشغيل دورة السوشال ميديا (Facebook + Instagram)
+    """
+    logger.info(f"\n{'═'*70}")
+    logger.info(f"📱 SOCIAL MEDIA CYCLE - Facebook & Instagram Publishing")
+    logger.info(f"{'═'*70}")
+    
+    cycle_start = datetime.now()
+    results = {}
+    
+    # 1. نشر على Facebook
+    logger.info(f"\n{'─'*50}")
+    logger.info(f"📘 Phase 1: Facebook Publishing")
+    logger.info(f"{'─'*50}")
+    
+    facebook_result = run_job_sequential('facebook_publishing', run_facebook_cycle)
+    results['facebook'] = facebook_result
+    
+    # تأخير بين المنصات
+    if facebook_result.get('success'):
+        logger.info("⏳ Waiting 30s before Instagram...")
+        time.sleep(30)
+    
+    # 2. نشر على Instagram
+    logger.info(f"\n{'─'*50}")
+    logger.info(f"📸 Phase 2: Instagram Publishing")
+    logger.info(f"{'─'*50}")
+    
+    instagram_result = run_job_sequential('instagram_publishing', run_instagram_cycle)
+    results['instagram'] = instagram_result
+    
+    cycle_duration = (datetime.now() - cycle_start).total_seconds()
+    
+    # إحصائيات دورة السوشال ميديا
+    logger.info(f"\n📊 Social Media Cycle Summary:")
+    logger.info(f"   Duration: {cycle_duration:.1f}s ({cycle_duration/60:.1f} min)")
+    
+    # Facebook status
+    if facebook_result.get('skipped'):
+        fb_status = "⏭️ SKIPPED"
+    elif facebook_result.get('success'):
+        fb_status = "✅ SUCCESS"
+    else:
+        fb_status = "❌ FAILED"
+    
+    # Instagram status
+    if instagram_result.get('skipped'):
+        ig_status = "⏭️ SKIPPED"
+    elif instagram_result.get('success'):
+        ig_status = "✅ SUCCESS"
+    else:
+        ig_status = "❌ FAILED"
+    
+    fb_duration = facebook_result.get('duration', 0)
+    ig_duration = instagram_result.get('duration', 0)
+    
+    logger.info(f"   {fb_status} Facebook: {fb_duration:.1f}s")
+    logger.info(f"   {ig_status} Instagram: {ig_duration:.1f}s")
+    logger.info(f"{'═'*70}")
+    
+    # حساب النجاح
+    successful = 0
+    if facebook_result.get('success'):
+        successful += 1
+    if instagram_result.get('success'):
+        successful += 1
+    
+    return {
+        'type': 'social_media',
+        'duration': cycle_duration,
+        'results': results,
+        'stats': {
+            'total': 2,
+            'successful': successful,
+            'failed': 2 - successful
+        }
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # Main Cycle
 # ═══════════════════════════════════════════════════════════════
@@ -319,6 +413,8 @@ def run_cycle(cycle_number: int) -> Dict:
         result = run_main_cycle()
     elif cycle_type == 'broadcast':
         result = run_broadcast_cycle()
+    elif cycle_type == 'social_media':
+        result = run_social_media_cycle()
     else:
         logger.error(f"❌ Unknown cycle type: {cycle_type}")
         return {
@@ -480,10 +576,14 @@ def main():
     logger.info("  7. 🎵 Audio Generation")
     logger.info("  8. 📱 Social Media Images")
     logger.info("  9. 🎬 Reel Generation")
-    logger.info("  10. 📤 Publishing")
+    logger.info("  10. 📱 Telegram Publishing")
     logger.info("")
     logger.info("Broadcast Cycle Jobs:")
     logger.info("  1. 📻 Newsletter & Digest Generation")
+    logger.info("")
+    logger.info("Social Media Cycle Jobs:")
+    logger.info("  1. 📘 Facebook Publishing")
+    logger.info("  2. 📸 Instagram Publishing")
     logger.info("═"*70)
     
     # Setup signal handlers

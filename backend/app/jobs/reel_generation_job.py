@@ -108,7 +108,7 @@ def generate_reels(report_id: int = None, force_update: bool = False):
                 log_task_execution('failed', 0, result.error_message)
         else:
             # Get batch size from environment variable
-            batch_size = int(os.getenv('MAX_REELS_PER_RUN', 4))
+            batch_size = int(os.getenv('MAX_REELS_PER_RUN', 1))
             
             # Generate reels for all reports (original behavior)
             logger.info(f"Processing limit: {batch_size} reports per run")
