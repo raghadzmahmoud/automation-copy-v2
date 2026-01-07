@@ -279,6 +279,7 @@ class PublishersJob:
                     SELECT gr.id, gr.status, gr.created_at
                     FROM generated_report gr
                     WHERE gr.status IN (
+                        'draft',
                         'ready_for_publishing',
                         'completed',
                         'facebook_published',
