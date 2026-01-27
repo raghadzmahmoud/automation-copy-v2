@@ -913,9 +913,11 @@ class PublishersJob:
                 if 'reel' in result:
                     results['instagram_reel'] = result['reel']
                 
-                # Check success
-                post_success = result.get('post', {}).get('success', False)
-                reel_success = result.get('reel', {}).get('success', False)
+                # Check success - handle case where post/reel might be None
+                post_result = result.get('post') or {}
+                reel_result = result.get('reel') or {}
+                post_success = post_result.get('success', False)
+                reel_success = reel_result.get('success', False)
                 
                 if post_success or reel_success or result.get('success'):
                     results['published_platforms'].append('instagram')
@@ -923,8 +925,10 @@ class PublishersJob:
                     logger.info(f"✅ Instagram published (Post: {post_success}, Reel: {reel_success})")
                 else:
                     logger.error(f"❌ Instagram failed: {result.get('message', 'Unknown error')}")
+            elif result is None:
+                logger.error(f"❌ Instagram publisher returned None")
             else:
-                logger.error(f"❌ Instagram returned unexpected result type")
+                logger.error(f"❌ Instagram returned unexpected result type: {type(result)}")
             
             # Update status
             if results['overall_success']:
@@ -1041,8 +1045,8 @@ class PublishersJob:
             logger.info(f"  {platform.title()}: {count}/{total_reports}")
         
         # Facebook detailed stats (post vs video)
-        fb_post_success = sum(1 for r in all_results if r.get('facebook_post', {}).get('success', False))
-        fb_video_success = sum(1 for r in all_results if r.get('facebook_video', {}).get('success', False))
+        fb_post_success = sum(1 for r in all_results if (r.get('facebook_post') or {}).get('success', False))
+        fb_video_success = sum(1 for r in all_results if (r.get('facebook_video') or {}).get('success', False))
         if fb_post_success > 0 or fb_video_success > 0:
             logger.info(f"  Facebook Posts: {fb_post_success}/{total_reports}")
             logger.info(f"  Facebook Videos: {fb_video_success}/{total_reports}")

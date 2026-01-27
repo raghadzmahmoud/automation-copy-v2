@@ -254,40 +254,48 @@ class InstagramPublisher:
         print(f"{'='*70}\n")
         
         results = {
-            'post': None,
-            'reel': None,
+            'post': {'success': False, 'message': 'Not attempted'},
+            'reel': {'success': False, 'message': 'Not attempted'},
             'success': False
         }
         
-        # 1. Publish Post
-        print("🔹 Publishing Post...")
-        post_result = self.publish_post(report_id)
-        results['post'] = post_result
-        
-        if not post_result['success']:
-            print(f"❌ Post failed: {post_result.get('message')}")
-        else:
-            print(f"✅ Post published: {post_result['media_id']}\n")
-        
-        # 2. Publish Reel
-        print("🔹 Publishing Reel...")
-        reel_result = self.publish_reel(report_id)
-        results['reel'] = reel_result
-        
-        if not reel_result['success']:
-            print(f"❌ Reel failed: {reel_result.get('message')}")
-        else:
-            print(f"✅ Reel published: {reel_result['media_id']}\n")
-        
-        # 3. Overall success
-        results['success'] = post_result['success'] or reel_result['success']
+        try:
+            # 1. Publish Post
+            print("🔹 Publishing Post...")
+            post_result = self.publish_post(report_id)
+            results['post'] = post_result if post_result else {'success': False, 'message': 'Post method returned None'}
+            
+            if not results['post']['success']:
+                print(f"❌ Post failed: {results['post'].get('message')}")
+            else:
+                print(f"✅ Post published: {results['post']['media_id']}\n")
+            
+            # 2. Publish Reel
+            print("🔹 Publishing Reel...")
+            reel_result = self.publish_reel(report_id)
+            results['reel'] = reel_result if reel_result else {'success': False, 'message': 'Reel method returned None'}
+            
+            if not results['reel']['success']:
+                print(f"❌ Reel failed: {results['reel'].get('message')}")
+            else:
+                print(f"✅ Reel published: {results['reel']['media_id']}\n")
+            
+            # 3. Overall success
+            results['success'] = results['post']['success'] or results['reel']['success']
+            
+        except Exception as e:
+            error_msg = f"Exception in publish_both: {str(e)}"
+            print(f"❌ {error_msg}")
+            results['post'] = {'success': False, 'message': error_msg}
+            results['reel'] = {'success': False, 'message': error_msg}
+            results['success'] = False
         
         # 4. Summary
         print(f"\n{'='*70}")
         print(f"📊 BOTH RESULTS:")
         print(f"{'='*70}")
-        print(f"Post: {'✅ ' + post_result.get('media_id', 'N/A') if post_result['success'] else '❌ Failed'}")
-        print(f"Reel: {'✅ ' + reel_result.get('media_id', 'N/A') if reel_result['success'] else '❌ Failed'}")
+        print(f"Post: {'✅ ' + results['post'].get('media_id', 'N/A') if results['post']['success'] else '❌ Failed'}")
+        print(f"Reel: {'✅ ' + results['reel'].get('media_id', 'N/A') if results['reel']['success'] else '❌ Failed'}")
         print(f"{'='*70}\n")
         
         return results
