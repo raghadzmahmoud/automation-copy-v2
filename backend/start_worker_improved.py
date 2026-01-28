@@ -96,7 +96,7 @@ def import_jobs():
     from app.jobs.audio_generation_job import generate_audio as _generate_audio
     from app.jobs.social_media_image_job import generate_social_media_images as _generate_social_media_images
     from app.jobs.reel_generation_job import generate_reels as _generate_reels
-    # from app.jobs.publishers_job import run_telegram_cycle as _run_telegram_cycle
+    from app.jobs.publishers_job import run_telegram_cycle as _run_telegram_cycle
     from app.jobs.publishers_job import run_facebook_cycle as _run_facebook_cycle
     from app.jobs.publishers_job import run_instagram_cycle as _run_instagram_cycle
     from app.jobs.broadcast_job import generate_all_broadcasts as _generate_all_broadcasts
@@ -111,7 +111,7 @@ def import_jobs():
     generate_audio = timeout_job_by_type('audio')(_generate_audio)
     generate_social_media_images = timeout_job_by_type('images')(_generate_social_media_images)
     generate_reels = timeout_job_by_type('video')(_generate_reels)
-    # run_telegram_cycle = timeout_job_by_type('publishing')(_run_telegram_cycle)
+    run_telegram_cycle = timeout_job_by_type('publishing')(_run_telegram_cycle)
     run_facebook_cycle = timeout_job_by_type('publishing')(_run_facebook_cycle)
     run_instagram_cycle = timeout_job_by_type('publishing')(_run_instagram_cycle)
     generate_all_broadcasts = timeout_job_by_type('broadcast')(_generate_all_broadcasts)
@@ -128,7 +128,7 @@ def import_jobs():
     logger.info("   🎵 generate_audio")
     logger.info("   📱 generate_social_media_images")
     logger.info("   🎬 generate_reels")
-    # logger.info("   📱 telegram_publishing")  # تم تعطيل النشر على تيليجرام
+    logger.info("   📱 telegram_publishing")
     logger.info("📋 Broadcast Cycle Jobs:")
     logger.info("   📻 generate_all_broadcasts")
     logger.info("📋 Social Media Cycle Jobs:")
@@ -204,7 +204,7 @@ def run_main_cycle() -> Dict:
         ('audio', generate_audio),
         ('social_media_images', generate_social_media_images),
         ('reels', generate_reels),
-        # ('telegram_publishing', run_telegram_cycle),  # تم تعطيل النشر على تيليجرام
+        ('telegram_publishing', run_telegram_cycle),
     ]
     
     # تشغيل كل job بالترتيب
@@ -576,7 +576,7 @@ def main():
     logger.info("  7. 🎵 Audio Generation")
     logger.info("  8. 📱 Social Media Images")
     logger.info("  9. 🎬 Reel Generation")
-    # logger.info("  10. 📱 Telegram Publishing")  # تم تعطيل النشر على تيليجرام
+    logger.info("  10. 📱 Telegram Publishing")
     logger.info("")
     logger.info("Broadcast Cycle Jobs:")
     logger.info("  1. 📻 Newsletter & Digest Generation")
