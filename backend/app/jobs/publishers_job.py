@@ -453,8 +453,8 @@ class PublishersJob:
                 
                 # Publish based on platform
                 if platform == 'facebook':
-                    # Publish both post and video to Facebook
-                    result = publisher.publish(report_id, 'both')
+                    # Publish post only (video disabled)
+                    result = publisher.publish(report_id, 'post')
                     
                     # Store individual results
                     if isinstance(result, dict) and 'post' in result and 'video' in result:
@@ -477,7 +477,7 @@ class PublishersJob:
                             logger.error(f"❌ Facebook failed: {result.get('message', 'Unknown error')}")
                     
                 elif platform == 'instagram':
-                    result = publisher.publish(report_id, 'both')  # Post + Reel
+                    result = publisher.publish(report_id, 'post')  # Post only (Reel disabled)
                     results[platform] = result
                     
                     if result.get('success'):
@@ -613,8 +613,8 @@ class PublishersJob:
                 try:
                     logger.info(f"🔹 Publishing to Facebook...")
                     
-                    # Publish both post and video
-                    result = publisher.publish(report_id, 'both')
+                    # Publish post only (video disabled)
+                    result = publisher.publish(report_id, 'post')
                     
                     # Store individual results
                     if isinstance(result, dict) and 'post' in result and 'video' in result:
@@ -657,8 +657,8 @@ class PublishersJob:
                 try:
                     logger.info(f"🔹 Publishing to Instagram...")
                     
-                    # Publish both post and reel
-                    result = publisher.publish(report_id, 'both')
+                    # Publish post only (reel disabled)
+                    result = publisher.publish(report_id, 'post')
                     results['instagram'] = result
                     
                     if result.get('success'):
@@ -809,8 +809,8 @@ class PublishersJob:
         try:
             logger.info(f"🔹 Publishing to Facebook...")
             
-            # Publish both post and video
-            result = publisher.publish(report_id, 'both')
+            # Publish post only (video disabled)
+            result = publisher.publish(report_id, 'post')
             
             # Store individual results
             if isinstance(result, dict) and 'post' in result and 'video' in result:
@@ -903,8 +903,8 @@ class PublishersJob:
         try:
             logger.info(f"🔹 Publishing to Instagram...")
             
-            # Publish both post and reel
-            result = publisher.publish(report_id, 'both')
+            # Publish post only (reel disabled)
+            result = publisher.publish(report_id, 'post')
             
             # Store results
             if isinstance(result, dict):

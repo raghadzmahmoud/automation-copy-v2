@@ -14,9 +14,9 @@ Main Cycle (Sequential):
 │  2. 🔄 Clustering (تجميع الأخبار)                          │
 │  3. 📝 Social Media Generation (توليد محتوى السوشال ميديا)   │
 │  4. 🖼️ Image Generation (توليد الصور)                      │
-│  5. 🎵 Audio Generation (توليد الصوت)                      │
+│  5. 🎵 Audio Generation (توليد الصوت) - DISABLED            │
 │  6. 📱 Social Media Image Generation (صور السوشال ميديا)    │
-│  7. 🎬 Reel Generation (توليد الريلز)                       │
+│  7. 🎬 Reel Generation (توليد الريلز) - DISABLED           │
 │  8. 📱 Telegram Publishing (النشر على تيليجرام)             │
 └─────────────────────────────────────────────────────────────┘
 
@@ -82,8 +82,8 @@ logger = logging.getLogger(__name__)
 def import_jobs():
     """Import all job functions with timeout decorators"""
     global scrape_news, cluster_news, generate_reports
-    global generate_social_media_content, generate_images, generate_audio
-    global generate_social_media_images, generate_reels
+    global generate_social_media_content, generate_images  # , generate_audio  # DISABLED
+    global generate_social_media_images  # , generate_reels  # DISABLED
     global run_telegram_cycle, run_facebook_cycle, run_instagram_cycle
     global generate_all_broadcasts, run_audio_transcription_job
     
@@ -93,9 +93,9 @@ def import_jobs():
     from app.jobs.reports_job import generate_reports as _generate_reports
     from app.jobs.social_media_job import generate_social_media_content as _generate_social_media_content
     from app.jobs.image_generation_job import generate_images as _generate_images
-    from app.jobs.audio_generation_job import generate_audio as _generate_audio
+    # from app.jobs.audio_generation_job import generate_audio as _generate_audio
     from app.jobs.social_media_image_job import generate_social_media_images as _generate_social_media_images
-    from app.jobs.reel_generation_job import generate_reels as _generate_reels
+    # from app.jobs.reel_generation_job import generate_reels as _generate_reels
     from app.jobs.publishers_job import run_telegram_cycle as _run_telegram_cycle
     from app.jobs.publishers_job import run_facebook_cycle as _run_facebook_cycle
     from app.jobs.publishers_job import run_instagram_cycle as _run_instagram_cycle
@@ -108,9 +108,9 @@ def import_jobs():
     generate_reports = timeout_job_by_type('reports')(_generate_reports)
     generate_social_media_content = timeout_job_by_type('social_media')(_generate_social_media_content)
     generate_images = timeout_job_by_type('images')(_generate_images)
-    generate_audio = timeout_job_by_type('audio')(_generate_audio)
+    # generate_audio = timeout_job_by_type('audio')(_generate_audio)
     generate_social_media_images = timeout_job_by_type('images')(_generate_social_media_images)
-    generate_reels = timeout_job_by_type('video')(_generate_reels)
+    # generate_reels = timeout_job_by_type('video')(_generate_reels)
     run_telegram_cycle = timeout_job_by_type('publishing')(_run_telegram_cycle)
     run_facebook_cycle = timeout_job_by_type('publishing')(_run_facebook_cycle)
     run_instagram_cycle = timeout_job_by_type('publishing')(_run_instagram_cycle)
@@ -125,9 +125,9 @@ def import_jobs():
     logger.info("   📝 generate_reports")
     logger.info("   📱 generate_social_media_content")
     logger.info("   🖼️ generate_images")
-    logger.info("   🎵 generate_audio")
+    # logger.info("   🎵 generate_audio")
     logger.info("   📱 generate_social_media_images")
-    logger.info("   🎬 generate_reels")
+    # logger.info("   🎬 generate_reels")
     logger.info("   📱 telegram_publishing")
     logger.info("📋 Broadcast Cycle Jobs:")
     logger.info("   📻 generate_all_broadcasts")
@@ -201,9 +201,9 @@ def run_main_cycle() -> Dict:
         ('reports', generate_reports),
         ('social_media_content', generate_social_media_content),
         ('images', generate_images),
-        ('audio', generate_audio),
+        # ('audio', generate_audio),  # معطل مؤقتاً
         ('social_media_images', generate_social_media_images),
-        ('reels', generate_reels),
+        # ('reels', generate_reels),  # DISABLED
         ('telegram_publishing', run_telegram_cycle),
     ]
     
@@ -500,9 +500,12 @@ def run_job_now(task_type: str) -> bool:
             return not result.get('error')
             
         elif task_type == 'audio_generation':
-            from app.jobs.audio_generation_job import generate_audio
-            result = generate_audio()
-            return not result.get('error')
+            # معطل مؤقتاً
+            logger.info("⏭️ Audio generation is temporarily disabled")
+            return True
+            # from app.jobs.audio_generation_job import generate_audio
+            # result = generate_audio()
+            # return not result.get('error')
             
         elif task_type == 'bulletin_generation' or task_type == 'digest_generation':
             from app.jobs.broadcast_job import generate_all_broadcasts
@@ -573,9 +576,9 @@ def main():
     logger.info("  4. 📝 Reports Generation")
     logger.info("  5. 📱 Social Media Content")
     logger.info("  6. 🖼️ Image Generation")
-    logger.info("  7. 🎵 Audio Generation")
+    logger.info("  7. 🎵 Audio Generation (DISABLED)")
     logger.info("  8. 📱 Social Media Images")
-    logger.info("  9. 🎬 Reel Generation")
+    logger.info("  9. 🎬 Reel Generation (DISABLED)")
     logger.info("  10. 📱 Telegram Publishing")
     logger.info("")
     logger.info("Broadcast Cycle Jobs:")

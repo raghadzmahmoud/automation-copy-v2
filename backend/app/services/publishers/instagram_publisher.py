@@ -270,10 +270,15 @@ class InstagramPublisher:
             else:
                 print(f"✅ Post published: {results['post']['media_id']}\n")
             
-            # 2. Publish Reel
-            print("🔹 Publishing Reel...")
-            reel_result = self.publish_reel(report_id)
-            results['reel'] = reel_result if reel_result else {'success': False, 'message': 'Reel method returned None'}
+            # 2. Publish Reel - DISABLED
+            # print("🔹 Publishing Reel...")
+            # reel_result = self.publish_reel(report_id)
+            # results['reel'] = reel_result if reel_result else {'success': False, 'message': 'Reel method returned None'}
+            
+            # Simulate reel result as skipped
+            reel_result = {'success': False, 'message': 'Reel publishing disabled'}
+            results['reel'] = reel_result
+            print("🔹 Reel publishing is disabled")
             
             if not results['reel']['success']:
                 print(f"❌ Reel failed: {results['reel'].get('message')}")

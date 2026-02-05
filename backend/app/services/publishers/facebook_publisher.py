@@ -310,10 +310,15 @@ class FacebookPublisher:
         print(f"⏳ Waiting {delay_seconds} seconds before video upload (rate limit protection)...")
         time.sleep(delay_seconds)
         
-        # 2. Publish Video
-        print("🔹 Publishing Video...")
-        video_result = self.publish_video(report_id)
+        # 2. Publish Video - DISABLED
+        # print("🔹 Publishing Video...")
+        # video_result = self.publish_video(report_id)
+        # results['video'] = video_result
+        
+        # Simulate video result as skipped
+        video_result = {'success': False, 'message': 'Video publishing disabled'}
         results['video'] = video_result
+        print("🔹 Video publishing is disabled")
         
         if not video_result['success']:
             print(f"❌ Video failed: {video_result.get('message')}")
