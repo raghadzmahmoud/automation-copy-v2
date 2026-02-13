@@ -25,13 +25,13 @@ class NewsItem(BaseModel):
     content_img: Optional[str] = None
     content_video: Optional[str] = None
     tags: Optional[str] = None
-    source_id: int
+    source_id: Optional[int] = None
     source_name: str
-    language_id: int
-    category_id: int
+    language_id: Optional[int] = None
+    category_id: Optional[int] = None
     category_name: str
-    published_at: datetime
-    collected_at: datetime
+    published_at: Optional[datetime] = None
+    collected_at: Optional[datetime] = None
 
 
 class NewsListItem(BaseModel):
@@ -39,7 +39,7 @@ class NewsListItem(BaseModel):
     title: str
     source_name: str
     category_name: str
-    published_at: datetime
+    published_at: Optional[datetime] = None
     tags: Optional[str] = None
 
 
@@ -78,7 +78,7 @@ async def list_news(
             FROM raw_news rn
             LEFT JOIN sources s ON rn.source_id = s.id
             LEFT JOIN categories c ON rn.category_id = c.id
-            WHERE 1=1
+            WHERE rn.title IS NOT NULL AND rn.title != ''
         """
         params = []
         
@@ -94,7 +94,7 @@ async def list_news(
             query += " AND (rn.title ILIKE %s OR rn.content_text ILIKE %s)"
             params.extend([f"%{search}%", f"%{search}%"])
         
-        query += " ORDER BY rn.published_at DESC"
+        query += " ORDER BY rn.published_at DESC NULLS LAST, rn.collected_at DESC NULLS LAST, rn.id DESC"
         
         if limit != -1:
             query += " LIMIT %s OFFSET %s"
@@ -146,7 +146,7 @@ async def get_news(news_id: int):
             FROM raw_news rn
             LEFT JOIN sources s ON rn.source_id = s.id
             LEFT JOIN categories c ON rn.category_id = c.id
-            WHERE rn.id = %s
+            WHERE rn.id = %s AND rn.title IS NOT NULL AND rn.title != ''
         """, (news_id,))
         
         row = cursor.fetchone()
@@ -224,14 +224,15 @@ async def get_news_stats():
         cursor = conn.cursor()
         
         # Total news
-        cursor.execute("SELECT COUNT(*) FROM raw_news")
+        cursor.execute("SELECT COUNT(*) FROM raw_news WHERE title IS NOT NULL AND title != ''")
         total = cursor.fetchone()[0]
         
         # By category
         cursor.execute("""
-            SELECT c.name, COUNT(rn.id)
+            SELECT COALESCE(c.name, 'Uncategorized'), COUNT(rn.id)
             FROM raw_news rn
             LEFT JOIN categories c ON rn.category_id = c.id
+            WHERE rn.title IS NOT NULL AND rn.title != ''
             GROUP BY c.name
             ORDER BY COUNT(rn.id) DESC
         """)
@@ -239,9 +240,10 @@ async def get_news_stats():
         
         # By source
         cursor.execute("""
-            SELECT s.name, COUNT(rn.id)
+            SELECT COALESCE(s.name, 'Unknown Source'), COUNT(rn.id)
             FROM raw_news rn
             LEFT JOIN sources s ON rn.source_id = s.id
+            WHERE rn.title IS NOT NULL AND rn.title != ''
             GROUP BY s.name
             ORDER BY COUNT(rn.id) DESC
             LIMIT 10
@@ -251,7 +253,8 @@ async def get_news_stats():
         # Today's news
         cursor.execute("""
             SELECT COUNT(*) FROM raw_news
-            WHERE published_at >= CURRENT_DATE
+            WHERE published_at >= CURRENT_DATE 
+            AND title IS NOT NULL AND title != ''
         """)
         today = cursor.fetchone()[0]
         
