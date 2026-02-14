@@ -30,11 +30,10 @@ RUN apt-get clean && \
         g++ \
         libpq-dev \
         fontconfig \
-        fonts-noto \
-        fonts-noto-arabic \
         ffmpeg \
         ca-certificates \
         curl && \
+    apt-get install -y --no-install-recommends fonts-noto fonts-noto-cjk || true && \
     fc-cache -fv && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
@@ -77,20 +76,11 @@ RUN mkdir -p /app/app/logs \
 # ═══════════════════════════════════════════════════════════════
 
 RUN echo "═══════════════════════════════════════════════════════════" && \
-    echo "🔍 Verifying Installation" && \
+    echo "🔍 Build Verification" && \
     echo "═══════════════════════════════════════════════════════════" && \
-    echo "📦 Python version:" && \
     python --version && \
-    echo "" && \
-    echo "📦 Key packages:" && \
-    pip list | grep -E "(google|psycopg2|fastapi|playwright|arabic)" || echo "Packages installed" && \
-    echo "" && \
-    echo "🎬 FFmpeg:" && \
-    ffmpeg -version | head -1 || echo "FFmpeg installed" && \
-    echo "" && \
-    echo "📁 Files:" && \
-    ls -la /app/ | head -10 && \
-    echo "" && \
+    echo "FFmpeg: $(ffmpeg -version | head -1)" && \
+    echo "Files: $(ls -la /app/ | wc -l) files in /app" && \
     echo "✅ Build complete" && \
     echo "═══════════════════════════════════════════════════════════"
 
