@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, status
 
-from app.services.processing.audio_input_processor_v2 import AudioInputProcessorV2 as AudioInputProcessor
+from app.services.processing.audio_input_processor import AudioInputProcessor
 
 router = APIRouter()
 
@@ -95,37 +95,74 @@ async def upload_audio(
     """
     Audio Upload Endpoint (Async)
     - Saves file to S3
+    - Saves metadata to database
     - Returns 200 immediately
-    - Processing happens in background (STT, classification, etc.)
+    - Background job will process it later
     """
     _validate_audio_file(file)
 
     processor = AudioInputProcessor()
 
     try:
-        result = processor.process_audio_async(
-            file=file,
-            user_id=user_id,
-            source_type_id=6
-        )
-
-        if not result.get("success"):
+        # Read file content
+        file.file.seek(0)
+        audio_bytes = file.file.read()
+        file_size = len(audio_bytes)
+        
+        original_filename = file.filename
+        mime_type = file.content_type or 'audio/mpeg'
+        
+        # Upload to S3
+        from io import BytesIO
+        file.file = BytesIO(audio_bytes)
+        
+        upload_result = processor._upload_to_s3(file)
+        
+        if not upload_result['success']:
+            processor.close()
             return _build_error_response(
-                message=result.get("error", "Audio processing failed"),
-                step=result.get("step"),
-                uploaded_file_id=result.get("uploaded_file_id")
+                message=f"فشل رفع الملف: {upload_result.get('error')}",
+                step="upload"
             )
-
-        return _build_success_response(result)
+        
+        audio_url = upload_result['url']
+        stored_filename = upload_result['s3_key'].split('/')[-1]
+        
+        # Save metadata with 'pending' status
+        uploaded_file_id = processor._save_uploaded_file_metadata(
+            original_filename=original_filename,
+            stored_filename=stored_filename,
+            file_path=audio_url,
+            file_size=file_size,
+            file_type='audio',
+            mime_type=mime_type
+        )
+        
+        processor.close()
+        
+        if not uploaded_file_id:
+            return _build_error_response(
+                message="فشل حفظ metadata",
+                step="metadata"
+            )
+        
+        # Return success - background job will process it
+        return {
+            "success": True,
+            "data": {
+                "uploaded_file_id": uploaded_file_id,
+                "audio_url": audio_url,
+                "message": "File uploaded successfully. Processing will happen in background."
+            },
+            "error": None
+        }
 
     except Exception as e:
+        processor.close()
         return _build_error_response(
             message=str(e),
             step="unexpected_error"
         )
-
-    finally:
-        processor.close()
 
 
 @router.post(
@@ -153,6 +190,9 @@ async def record_audio(
             source_type_id=7
         )
 
+        # Close processor after getting result
+        processor.close()
+
         if not result.get("success"):
             return _build_error_response(
                 message=result.get("error", "Audio recording processing failed"),
@@ -163,13 +203,11 @@ async def record_audio(
         return _build_success_response(result)
 
     except Exception as e:
+        processor.close()
         return _build_error_response(
             message=str(e),
             step="unexpected_error"
         )
-
-    finally:
-        processor.close()
 
 
 @router.get(

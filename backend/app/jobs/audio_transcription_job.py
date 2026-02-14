@@ -58,17 +58,18 @@ def build_full_url(file_path: str) -> str:
 
 def get_pending_audio_files():
     """
-    جلب ملفات الصوت اللي محتاجة معالجة
+    جلب ملفات الصوت والفيديو اللي محتاجة معالجة
     """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
         # جلب الملفات pending أو failed مع retry_count < MAX_RETRIES
+        # يشمل audio و video
         cursor.execute("""
             SELECT id, original_filename, file_path, file_type, retry_count
             FROM uploaded_files
-            WHERE file_type = 'audio'
+            WHERE file_type IN ('audio', 'video')
             AND (processing_status = 'pending' OR processing_status = 'failed')
             AND retry_count < %s
             ORDER BY created_at ASC

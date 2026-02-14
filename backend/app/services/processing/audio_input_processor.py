@@ -113,28 +113,30 @@ class AudioInputProcessor:
         print(f"🎙️ Processing Audio: {file.filename}")
         print(f"{'='*70}")
         
+        uploaded_file_id = None
+        
         try:
-            # ========================================
-            # Get file size first (before upload)
-            # ========================================
+            # Read file content ONCE
             try:
-                file.file.seek(0, 2)  # Seek to end
-                file_size = file.file.tell()
-                file.file.seek(0)  # Reset to beginning
-            except:
-                # Fallback: read content and get length
-                content = file.file.read()
-                file_size = len(content)
-                # Create new BytesIO with content
-                from io import BytesIO
-                file.file = BytesIO(content)
+                file.file.seek(0)
+                audio_bytes = file.file.read()
+                file_size = len(audio_bytes)
+            except Exception as read_error:
+                print(f"❌ Error reading file: {read_error}")
+                return {
+                    'success': False, 
+                    'error': f'Failed to read file: {str(read_error)}', 
+                    'step': 'file_read'
+                }
+            
+            original_filename = file.filename
+            mime_type = file.content_type or self._detect_mime_type(file.filename)
             
             # ========================================
-            # Detect mime_type FIRST (before upload)
+            # Detect mime_type
             # ========================================
-            mime_type = file.content_type if file.content_type else self._detect_mime_type(file.filename)
             print(f"\n📋 File Info:")
-            print(f"   Filename: {file.filename}")
+            print(f"   Filename: {original_filename}")
             print(f"   MIME Type: {mime_type}")
             print(f"   Size: {file_size} bytes")
             
@@ -143,19 +145,18 @@ class AudioInputProcessor:
             # ========================================
             print("\n📤 Step 1: Uploading to S3...")
             
+            # Recreate file object with the bytes we read
+            from io import BytesIO
+            file.file = BytesIO(audio_bytes)
+            
             # Check if audio needs conversion before upload
             if mime_type and self.audio_converter.needs_conversion(mime_type):
                 print(f"   🔄 Converting {mime_type} to WAV before upload...")
                 
-                # Read file content
-                file.file.seek(0)
-                file_content = file.file.read()
-                file.file.seek(0)
-                
                 # Save to temp file
                 import tempfile
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
-                    temp_file.write(file_content)
+                    temp_file.write(audio_bytes)
                     temp_path = temp_file.name
                 
                 # Convert to WAV
