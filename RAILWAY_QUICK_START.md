@@ -1,62 +1,93 @@
 # 🚀 Railway Deployment - Quick Start
 
-## خطوات سريعة للـ Deployment
+## ⚡ خطوات سريعة (5 دقائق)
 
-### 1. تحضير البيئة
+### 1. تجربة محلية (اختياري)
 ```bash
 cd backend
-python check_deployment_ready.py
+test_docker_build.bat  # Windows
+# أو
+./test_docker_build.sh  # Linux/Mac
 ```
 
 ### 2. إنشاء مشروع في Railway
-1. اذهب إلى [railway.app](https://railway.app)
-2. أنشئ مشروع جديد
-3. اختر "Deploy from GitHub repo"
+1. [railway.app](https://railway.app) → New Project
+2. Deploy from GitHub repo
+3. اختر الـ repository
 
-### 3. إعداد المتغيرات البيئية
+### 3. إعداد Service
 
-في Railway Dashboard → Variables، أضف:
-
-**Database:**
-- `DB_NAME`
-- `DB_USER`
-- `DB_PASSWORD`
-- `DB_HOST`
-- `DB_PORT`
-
-**API Keys:**
-- `GEMINI_API_KEY`
-
-**AWS S3:**
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `S3_BUCKET_NAME`
-- `AWS_REGION`
-
-### 4. إعداد الـ Service
+**Settings → General:**
+- Service Name: `worker`
+- Root Directory: `backend`
 
 **Settings → Build:**
-- Root Directory: `backend`
+- Builder: Dockerfile
 - Dockerfile Path: `Dockerfile.worker`
 
 **Settings → Deploy:**
 - Start Command: `python worker.py`
 
-### 5. Deploy!
-اضغط "Deploy" وانتظر البناء
+### 4. Environment Variables (الأساسية)
 
-### 6. تحقق من التشغيل
+اذهب إلى Variables tab:
+
 ```bash
-# في Railway logs
-railway logs --tail 100
+# Database
+DB_NAME=your_db
+DB_USER=your_user
+DB_PASSWORD=your_pass
+DB_HOST=your_host
+DB_PORT=5432
+
+# API
+GEMINI_API_KEY=your_key
+
+# S3
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+S3_BUCKET_NAME=your_bucket
+AWS_REGION=us-east-1
+
+# Worker (اختياري)
+MAX_WORKERS=3
+PYTHONPATH=/app
+PYTHONUNBUFFERED=1
 ```
 
-يجب أن ترى:
+### 5. Deploy!
+اضغط Deploy → انتظر 5-10 دقائق
+
+### 6. تحقق
+في Logs يجب أن ترى:
 ```
 ⚙️ Production Worker Starting
 📋 Loaded X job types
+🚀 Started worker thread 1/3
 💓 Worker alive
 ```
 
 ## ✅ Done!
-الـ worker الآن يشتغل ويعالج الملفات الصوتية تلقائياً كل 5 دقائق
+
+الـ worker الآن:
+- ✅ يشتغل 24/7
+- ✅ يعالج الملفات الصوتية تلقائياً
+- ✅ Multi-threaded (3 threads)
+- ✅ Auto-restart on failure
+
+## 🐛 مشاكل شائعة
+
+**Build fails:**
+- تأكد Root Directory = `backend`
+- تأكد Dockerfile Path = `Dockerfile.worker`
+
+**Worker not starting:**
+- تحقق من Environment Variables
+- تأكد من DB credentials
+
+**Jobs not running:**
+- تحقق من `scheduled_tasks` في الـ database
+- تأكد إن `audio_transcription` task نشط
+
+## 📚 المزيد
+شوف `RAILWAY_DEPLOYMENT.md` للتفاصيل الكاملة

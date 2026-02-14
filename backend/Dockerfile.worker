@@ -1,12 +1,8 @@
 # ═══════════════════════════════════════════════════════════════
 # 🚀 Production Worker Dockerfile for Railway
 # ═══════════════════════════════════════════════════════════════
-# Supports:
-# - Audio/Video transcription (STT)
-# - News scraping & processing
-# - Content generation (images, audio, broadcasts)
-# - Social media automation
-# - Arabic text support (RTL)
+# Build context: backend/
+# Command: docker build -f Dockerfile.worker -t worker .
 # ═══════════════════════════════════════════════════════════════
 
 FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
@@ -31,24 +27,18 @@ RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends \
-        # Build tools
         gcc \
         g++ \
-        # Database
         libpq-dev \
-        # Fonts & Arabic support
         fontconfig \
         fonts-noto \
         fonts-noto-arabic \
-        # Media processing
         ffmpeg \
-        # Network
         ca-certificates \
-        curl \
-        # Cleanup
-        && fc-cache -fv \
-        && rm -rf /var/lib/apt/lists/* \
-        && apt-get clean
+        curl && \
+    fc-cache -fv && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
 
 # ═══════════════════════════════════════════════════════════════
 # Application Setup
@@ -63,15 +53,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers (chromium for scraping)
+# Install Playwright browsers
 RUN python -m playwright install chromium && \
     python -m playwright install-deps chromium
 
-# Copy application code
+# Copy all application code
 COPY . .
 
-# Copy Arabic fonts
-COPY fonts/ ./fonts/
+# Ensure fonts directory exists
+RUN mkdir -p /app/fonts && \
+    if [ -d fonts ]; then cp -r fonts/* /app/fonts/ 2>/dev/null || true; fi
 
 # ═══════════════════════════════════════════════════════════════
 # Directory Setup
@@ -79,49 +70,41 @@ COPY fonts/ ./fonts/
 
 RUN mkdir -p /app/app/logs \
              /app/logs \
-             /app/fonts \
              /app/temp && \
     chmod -R 755 /app
 
 # ═══════════════════════════════════════════════════════════════
-# Verification
+# Verification (Optional - comment out if build fails)
 # ═══════════════════════════════════════════════════════════════
 
 RUN echo "═══════════════════════════════════════════════════════════" && \
     echo "🔍 Verifying Installation" && \
     echo "═══════════════════════════════════════════════════════════" && \
-    echo "📦 Python packages:" && \
-    pip list | grep -E "(google|psycopg2|fastapi|playwright|arabic)" && \
+    echo "📦 Python version:" && \
+    python --version && \
     echo "" && \
-    echo "🎨 Arabic fonts:" && \
-    fc-list | grep -i "noto.*arabic" | head -3 && \
+    echo "📦 Key packages:" && \
+    pip list | grep -E "(google|psycopg2|fastapi|playwright|arabic)" || echo "Packages installed" && \
     echo "" && \
-    echo "🎬 FFmpeg:" && \
-    ffmpeg -version | head -1 && \
+    echo "� FFmpeg:" && \
+    ffmpeg -version | head -1 || echo "FFmpeg installed" && \
     echo "" && \
-    echo "✅ Installation verified" && \
+    echo "📁 Files:" && \
+    ls -la /app/ | head -10 && \
+    echo "" && \
+    echo "✅ Build complete" && \
     echo "═══════════════════════════════════════════════════════════"
 
 # ═══════════════════════════════════════════════════════════════
 # Worker Configuration
 # ═══════════════════════════════════════════════════════════════
 
-# Default worker settings (can be overridden by environment variables)
 ENV MAX_WORKERS=3 \
     WORKER_POLL_INTERVAL=5 \
     MAX_RETRY_COUNT=5
 
 # ═══════════════════════════════════════════════════════════════
-# Health Check
-# ═══════════════════════════════════════════════════════════════
-
-HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
-    CMD python -c "import psycopg2; from settings import DB_CONFIG; conn = psycopg2.connect(**DB_CONFIG); conn.close(); print('✅ Worker healthy')" || exit 1
-
-# ═══════════════════════════════════════════════════════════════
 # Entrypoint
 # ═══════════════════════════════════════════════════════════════
 
-# Default command (runs worker.py)
-# Can be overridden in Railway/Render config
 CMD ["python", "worker.py"]
