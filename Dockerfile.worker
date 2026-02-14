@@ -1,0 +1,109 @@
+# ═══════════════════════════════════════════════════════════════
+# 🚀 Production Worker Dockerfile for Railway
+# ═══════════════════════════════════════════════════════════════
+# Build from project root with backend/ as context
+# ═══════════════════════════════════════════════════════════════
+
+FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
+
+# ═══════════════════════════════════════════════════════════════
+# System Configuration
+# ═══════════════════════════════════════════════════════════════
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    FONTCONFIG_PATH=/etc/fonts \
+    FC_LANG=ar
+
+# ═══════════════════════════════════════════════════════════════
+# System Dependencies
+# ═══════════════════════════════════════════════════════════════
+
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        libpq-dev \
+        fontconfig \
+        fonts-noto \
+        fonts-noto-arabic \
+        ffmpeg \
+        ca-certificates \
+        curl && \
+    fc-cache -fv && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+# ═══════════════════════════════════════════════════════════════
+# Application Setup
+# ═══════════════════════════════════════════════════════════════
+
+WORKDIR /app
+
+# Copy requirements from backend/
+COPY backend/requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright browsers
+RUN python -m playwright install chromium && \
+    python -m playwright install-deps chromium
+
+# Copy all backend code
+COPY backend/ .
+
+# Ensure fonts directory exists
+RUN mkdir -p /app/fonts && \
+    if [ -d fonts ]; then cp -r fonts/* /app/fonts/ 2>/dev/null || true; fi
+
+# ═══════════════════════════════════════════════════════════════
+# Directory Setup
+# ═══════════════════════════════════════════════════════════════
+
+RUN mkdir -p /app/app/logs \
+             /app/logs \
+             /app/temp && \
+    chmod -R 755 /app
+
+# ═══════════════════════════════════════════════════════════════
+# Verification
+# ═══════════════════════════════════════════════════════════════
+
+RUN echo "═══════════════════════════════════════════════════════════" && \
+    echo "🔍 Verifying Installation" && \
+    echo "═══════════════════════════════════════════════════════════" && \
+    echo "📦 Python version:" && \
+    python --version && \
+    echo "" && \
+    echo "📦 Key packages:" && \
+    pip list | grep -E "(google|psycopg2|fastapi|playwright|arabic)" || echo "Packages installed" && \
+    echo "" && \
+    echo "🎬 FFmpeg:" && \
+    ffmpeg -version | head -1 || echo "FFmpeg installed" && \
+    echo "" && \
+    echo "📁 Files:" && \
+    ls -la /app/ | head -10 && \
+    echo "" && \
+    echo "✅ Build complete" && \
+    echo "═══════════════════════════════════════════════════════════"
+
+# ═══════════════════════════════════════════════════════════════
+# Worker Configuration
+# ═══════════════════════════════════════════════════════════════
+
+ENV MAX_WORKERS=3 \
+    WORKER_POLL_INTERVAL=5 \
+    MAX_RETRY_COUNT=5
+
+# ═══════════════════════════════════════════════════════════════
+# Entrypoint
+# ═══════════════════════════════════════════════════════════════
+
+CMD ["python", "worker.py"]

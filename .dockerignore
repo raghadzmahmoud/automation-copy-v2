@@ -1,0 +1,95 @@
+# ═══════════════════════════════════════════════════════════════
+# Docker Ignore - Root Level
+# ═══════════════════════════════════════════════════════════════
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/*.so
+**/.Python
+**/*.egg-info/
+**/dist/
+**/build/
+
+# Virtual environments
+**/venv/
+**/env/
+**/ENV/
+**/.venv
+
+# IDE
+.vscode/
+.idea/
+**/*.swp
+**/*.swo
+**/*~
+
+# Testing
+**/.pytest_cache/
+**/.coverage
+**/htmlcov/
+
+# Logs (will be created in container)
+**/logs/
+**/*.log
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Database
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# Temporary files
+**/temp/
+**/tmp/
+**/*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+**/*.md
+!README.md
+
+# Test files
+**/test_*.py
+**/*_test.py
+**/tests/
+
+# Development scripts
+**/check_*.py
+**/show_*.py
+**/verify_*.py
+**/monitor_*.py
+**/optimize_*.py
+**/fix_*.py
+**/pause_*.py
+**/remove_*.py
+
+# Docker files
+**/Dockerfile*
+**/docker-compose*.yml
+**/.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Deployment configs (keep railway.json)
+render.yaml
+**/railway.toml
+
+# Frontend (if exists)
+frontend/
+node_modules/
