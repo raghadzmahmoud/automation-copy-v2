@@ -191,6 +191,11 @@ async def record_video(
 ):
     """
     Video Record Endpoint
+    - Saves recorded video to S3
+    - Extracts audio and saves to S3
+    - Saves metadata to database
+    - Returns 200 immediately
+    - Background job will process it later
     source_type_id = 9 (Video Record)
     """
     _validate_video_file(file)
@@ -198,27 +203,81 @@ async def record_video(
     processor = VideoInputProcessor()
 
     try:
-        result = processor.process_video(
-            file=file,
-            user_id=user_id,
-            source_type_id=9
-        )
-
-        if not result.get("success"):
+        # Read file content
+        file.file.seek(0)
+        video_bytes = file.file.read()
+        video_size = len(video_bytes)
+        
+        original_filename = file.filename
+        mime_type = file.content_type or 'video/webm'  # Usually webm for recordings
+        
+        # Upload video to S3
+        from io import BytesIO
+        file.file = BytesIO(video_bytes)
+        
+        video_upload_result = processor.audio_processor._upload_to_s3(file, file_type="video")
+        
+        if not video_upload_result['success']:
+            processor.close()
             return _build_error_response(
-                message=result.get("error", "Video recording processing failed")
+                message=f"فشل رفع الفيديو: {video_upload_result.get('error')}",
+                step="upload"
             )
-
-        return _build_success_response(result)
+        
+        video_url = video_upload_result['url']
+        video_s3_key = video_upload_result['s3_key']
+        stored_filename = video_s3_key.split('/')[-1]
+        
+        # Save video metadata with 'pending' status
+        video_file_id = processor.audio_processor._save_uploaded_file_metadata(
+            original_filename=original_filename,
+            stored_filename=stored_filename,
+            file_path=video_url,
+            file_size=video_size,
+            file_type='video',
+            mime_type=mime_type
+        )
+        
+        if not video_file_id:
+            processor.close()
+            return _build_error_response(
+                message="فشل حفظ metadata",
+                step="metadata"
+            )
+        
+        # Extract audio from video
+        print("🎵 Extracting audio from recorded video...")
+        temp_upload_file = UploadFile(filename=original_filename, file=BytesIO(video_bytes))
+        audio_upload_file = processor._extract_audio_from_video(temp_upload_file)
+        
+        audio_url = None
+        if audio_upload_file:
+            # Upload extracted audio to S3
+            audio_upload_result = processor.audio_processor._upload_to_s3(audio_upload_file)
+            if audio_upload_result['success']:
+                audio_url = audio_upload_result['url']
+                print(f"✅ Audio extracted and uploaded: {audio_url}")
+        
+        processor.close()
+        
+        # Return success - background job will process it
+        return {
+            "success": True,
+            "data": {
+                "uploaded_file_id": video_file_id,
+                "video_url": video_url,
+                "audio_url": audio_url,
+                "message": "Recording uploaded successfully. Processing will happen in background."
+            },
+            "error": None
+        }
 
     except Exception as e:
+        processor.close()
         return _build_error_response(
             message=str(e),
             step="unexpected_error"
         )
-
-    finally:
-        processor.close()
 
 
 @router.get(
