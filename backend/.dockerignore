@@ -1,4 +1,6 @@
-# 🚫 Docker ignore file for worker deployment
+# ═══════════════════════════════════════════════════════════════
+# Docker Ignore - Exclude unnecessary files from build
+# ═══════════════════════════════════════════════════════════════
 
 # Python
 __pycache__/
@@ -6,73 +8,85 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+dist/
+build/
 
 # Virtual environments
 venv/
 env/
 ENV/
+.venv
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Logs (will be created in container)
+logs/
+*.log
+
+# Environment files (use Railway env vars instead)
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+temp/
+tmp/
+*.tmp
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs (keep structure but ignore content)
-*.log
-app/logs/*.log
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
 # Git
 .git/
 .gitignore
+.gitattributes
 
-# Documentation
-README.md
+# Documentation (not needed in container)
 *.md
+!README.md
 
-# Test files (all removed for production)
+# Test files
 test_*.py
 *_test.py
 tests/
 
-# Development files
-.env.example
-debug_*.py
+# Development scripts
+check_*.py
+show_*.py
+verify_*.py
+monitor_*.py
+optimize_*.py
 fix_*.py
-*.sql
+pause_*.py
+remove_*.py
 
-# Docker
-Dockerfile
-Dockerfile.*
-docker-compose.yml
+# Docker files (not needed inside container)
+Dockerfile*
+docker-compose*.yml
 .dockerignore
 
-# Render
-render.yaml
+# CI/CD
+.github/
+.gitlab-ci.yml
 
-# Keep Google credentials file
-!n8nraghad-7fc0064b9857.json
+# Deployment configs
+render.yaml
+railway.yaml

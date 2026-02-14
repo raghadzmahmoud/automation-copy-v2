@@ -1,87 +1,127 @@
-# 🎯 Docker for Full Pipeline Worker
-# Complete automation pipeline with Arabic Support
+# ═══════════════════════════════════════════════════════════════
+# 🚀 Production Worker Dockerfile for Railway
+# ═══════════════════════════════════════════════════════════════
+# Supports:
+# - Audio/Video transcription (STT)
+# - News scraping & processing
+# - Content generation (images, audio, broadcasts)
+# - Social media automation
+# - Arabic text support (RTL)
+# ═══════════════════════════════════════════════════════════════
 
 FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
 
-# Set non-interactive mode for apt
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
+# ═══════════════════════════════════════════════════════════════
+# System Configuration
+# ═══════════════════════════════════════════════════════════════
 
-# Update package lists and install ca-certificates first
-RUN apt-get clean && \
-    apt-get update --fix-missing && \
-    apt-get install -y --no-install-recommends ca-certificates && \
-    apt-get update --fix-missing
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    FONTCONFIG_PATH=/etc/fonts \
+    FC_LANG=ar
 
-# Install basic system dependencies with retry logic
+# ═══════════════════════════════════════════════════════════════
+# System Dependencies
+# ═══════════════════════════════════════════════════════════════
+
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends \
+        # Build tools
         gcc \
         g++ \
+        # Database
         libpq-dev \
+        # Fonts & Arabic support
         fontconfig \
+        fonts-noto \
+        fonts-noto-arabic \
+        # Media processing
         ffmpeg \
+        # Network
         ca-certificates \
-        curl && \
-    rm -rf /var/lib/apt/lists/*
+        curl \
+        # Cleanup
+        && fc-cache -fv \
+        && rm -rf /var/lib/apt/lists/* \
+        && apt-get clean
 
-# Try to install Arabic fonts (optional) with retry logic
-RUN apt-get update --fix-missing && \
-    (apt-get install -y --no-install-recommends fonts-noto fonts-noto-arabic || echo "Arabic fonts not available") && \
-    fc-cache -fv && \
-    rm -rf /var/lib/apt/lists/*
+# ═══════════════════════════════════════════════════════════════
+# Application Setup
+# ═══════════════════════════════════════════════════════════════
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements first (for better caching)
+# Copy requirements first (better caching)
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers (chromium for scraping)
-RUN python -m playwright install chromium
+RUN python -m playwright install chromium && \
+    python -m playwright install-deps chromium
 
-# Copy the entire backend code
+# Copy application code
 COPY . .
 
-# Copy Arabic fonts to ensure availability
+# Copy Arabic fonts
 COPY fonts/ ./fonts/
 
-# Verify font installation
-RUN echo "📝 Checking installed fonts..." && \
-    fc-list | grep -i noto | head -5 && \
-    echo "✅ Font installation complete"
+# ═══════════════════════════════════════════════════════════════
+# Directory Setup
+# ═══════════════════════════════════════════════════════════════
 
-# Set environment variables for full pipeline worker
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-ENV FONTCONFIG_PATH=/etc/fonts
-ENV FC_LANG=ar
-
-# Worker specific settings
-ENV WORKER_TYPE=full
-ENV CYCLE_INTERVAL=120
-ENV REEL_BATCH_SIZE=4
-ENV IMAGE_BATCH_SIZE=4
-
-# Create necessary directories with proper permissions
-RUN mkdir -p /app/app/logs && \
-    mkdir -p /app/fonts && \
-    mkdir -p /app/temp && \
+RUN mkdir -p /app/app/logs \
+             /app/logs \
+             /app/fonts \
+             /app/temp && \
     chmod -R 755 /app
 
-# Expose port (not really needed for worker, but good practice)
-EXPOSE 8000
+# ═══════════════════════════════════════════════════════════════
+# Verification
+# ═══════════════════════════════════════════════════════════════
 
-# Health check for full pipeline worker
+RUN echo "═══════════════════════════════════════════════════════════" && \
+    echo "🔍 Verifying Installation" && \
+    echo "═══════════════════════════════════════════════════════════" && \
+    echo "📦 Python packages:" && \
+    pip list | grep -E "(google|psycopg2|fastapi|playwright|arabic)" && \
+    echo "" && \
+    echo "🎨 Arabic fonts:" && \
+    fc-list | grep -i "noto.*arabic" | head -3 && \
+    echo "" && \
+    echo "🎬 FFmpeg:" && \
+    ffmpeg -version | head -1 && \
+    echo "" && \
+    echo "✅ Installation verified" && \
+    echo "═══════════════════════════════════════════════════════════"
+
+# ═══════════════════════════════════════════════════════════════
+# Worker Configuration
+# ═══════════════════════════════════════════════════════════════
+
+# Default worker settings (can be overridden by environment variables)
+ENV MAX_WORKERS=3 \
+    WORKER_POLL_INTERVAL=5 \
+    MAX_RETRY_COUNT=5
+
+# ═══════════════════════════════════════════════════════════════
+# Health Check
+# ═══════════════════════════════════════════════════════════════
+
 HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
-    CMD python -c "import arabic_reshaper, bidi; from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; print('✅ Full pipeline worker healthy')" || exit 1
+    CMD python -c "import psycopg2; from settings import DB_CONFIG; conn = psycopg2.connect(**DB_CONFIG); conn.close(); print('✅ Worker healthy')" || exit 1
 
-# Run the improved worker with full pipeline
-CMD ["python", "start_worker_improved.py"]
+# ═══════════════════════════════════════════════════════════════
+# Entrypoint
+# ═══════════════════════════════════════════════════════════════
+
+# Default command (runs worker.py)
+# Can be overridden in Railway/Render config
+CMD ["python", "worker.py"]

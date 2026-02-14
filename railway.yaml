@@ -1,0 +1,49 @@
+# ═══════════════════════════════════════════════════════════════
+# 🚀 Railway Configuration - Production Worker
+# ═══════════════════════════════════════════════════════════════
+# 
+# Architecture:
+# - Worker service: Executes scheduled jobs from database
+# - Jobs: Scraping, STT, Clustering, Reports, Content Generation
+# 
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  # ═══════════════════════════════════════════════════════════
+  # ⚙️ Production Worker (Job Executor)
+  # ═══════════════════════════════════════════════════════════
+  worker:
+    # Build configuration
+    build:
+      dockerfile: backend/Dockerfile.worker
+      context: backend
+    
+    # Start command
+    startCommand: python worker.py
+    
+    # Resource allocation
+    # Railway will auto-scale based on plan
+    
+    # Environment variables
+    variables:
+      # Python
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      
+      # Worker Configuration
+      MAX_WORKERS: "3"
+      WORKER_POLL_INTERVAL: "5"
+      MAX_RETRY_COUNT: "5"
+      
+      # Logging
+      LOG_LEVEL: INFO
+      
+    # Health check
+    healthcheck:
+      path: /
+      interval: 60
+      timeout: 15
+      
+    # Restart policy
+    restartPolicyType: ON_FAILURE
+    restartPolicyMaxRetries: 3
