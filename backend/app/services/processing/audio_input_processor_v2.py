@@ -49,6 +49,179 @@ class AudioInputProcessorV2:
         print("✅ All services initialized!")
         print("=" * 60 + "\n")
     
+    def process_audio_async(self, file: UploadFile, user_id: Optional[int] = None, source_type_id: int = 6) -> Dict:
+        """
+        Async Pipeline: Audio → WAV → S3 → Return 200 → Background Processing
+        
+        Returns immediately after saving file to S3.
+        Background job handles: STT → Refiner → Classifier → raw_news
+        """
+        
+        print(f"\n{'='*70}")
+        print(f"🎙️ Processing Audio (ASYNC): {file.filename}")
+        print(f"{'='*70}")
+        
+        uploaded_file_id = None
+        
+        try:
+            # Get file info
+            original_filename = file.filename
+            mime_type = file.content_type or 'audio/mpeg'
+            
+            # Read file content
+            file.file.seek(0)
+            audio_bytes = file.file.read()
+            file_size = len(audio_bytes)
+            
+            print(f"\n📋 Original File: {original_filename} ({file_size} bytes)")
+            print(f"   MIME Type: {mime_type}")
+            
+            # ========================================
+            # Step 1: Convert to WAV (same as video)
+            # ========================================
+            print("\n🔄 Step 1: Converting to WAV...")
+            wav_file = self._convert_to_wav(audio_bytes, original_filename)
+            
+            if not wav_file:
+                # Save metadata with error before returning
+                uploaded_file_id = self._save_metadata_with_error(
+                    original_filename=original_filename,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                    error_msg='فشل تحويل الصوت إلى WAV'
+                )
+                return {'success': False, 'error': 'فشل تحويل الصوت', 'step': 'conversion', 'uploaded_file_id': uploaded_file_id}
+            
+            # ========================================
+            # Step 2: Upload WAV to S3
+            # ========================================
+            print("\n📤 Step 2: Uploading to S3...")
+            upload_result = self.s3_uploader.upload_audio(wav_file.file, wav_file.filename)
+            
+            if not upload_result['success']:
+                uploaded_file_id = self._save_metadata_with_error(
+                    original_filename=original_filename,
+                    file_size=file_size,
+                    mime_type=mime_type,
+                    error_msg=f"فشل رفع الملف: {upload_result.get('error')}"
+                )
+                return {'success': False, 'error': f"فشل رفع الملف: {upload_result.get('error')}", 'step': 'upload', 'uploaded_file_id': uploaded_file_id}
+            
+            audio_url = upload_result['url']
+            print(f"✅ Uploaded: {audio_url}")
+            
+            # ========================================
+            # Step 3: Save metadata (pending status)
+            # ========================================
+            print("\n💾 Step 3: Saving metadata...")
+            
+            # Get WAV file size
+            wav_file.file.seek(0, 2)  # Seek to end
+            wav_size = wav_file.file.tell()
+            wav_file.file.seek(0)  # Reset
+            
+            uploaded_file_id = self._save_metadata(
+                original_filename=original_filename,
+                stored_filename=upload_result['s3_key'].split('/')[-1],
+                file_path=audio_url,
+                file_size=wav_size,
+                mime_type='audio/wav'
+            )
+            
+            if not uploaded_file_id:
+                return {'success': False, 'error': 'فشل حفظ metadata', 'step': 'metadata'}
+            
+            print(f"   ✅ Saved with ID: {uploaded_file_id}")
+            
+            # ========================================
+            # Step 4: Schedule background processing
+            # ========================================
+            print("\n⏳ Step 4: Scheduling background processing...")
+            self._schedule_background_processing(uploaded_file_id, audio_url, source_type_id)
+            
+            print(f"\n✅ SUCCESS! Processing scheduled (ID: {uploaded_file_id})")
+            print("   The file will be processed in the background.")
+            print("   Check /api/media/input/audio/status/{id} for progress.")
+            
+            return {
+                'success': True,
+                'news_id': None,  # Not available yet
+                'title': None,
+                'content': None,
+                'category': None,
+                'tags': None,
+                'uploaded_file_id': uploaded_file_id,
+                'audio_url': audio_url,
+                'transcription': None,
+                'message': 'Processing scheduled. Check status endpoint for updates.'
+            }
+            
+        except Exception as e:
+            print(f"\n❌ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Try to save error if we have uploaded_file_id
+            if uploaded_file_id:
+                self._update_error(uploaded_file_id, str(e))
+            
+            return {'success': False, 'error': str(e), 'step': 'unknown', 'uploaded_file_id': uploaded_file_id}
+    
+    def _schedule_background_processing(self, uploaded_file_id: int, audio_url: str, source_type_id: int):
+        """
+        Schedule background processing for audio file
+        Creates a job in scheduled_tasks for audio_transcription
+        """
+        try:
+            import json
+            from datetime import datetime, timezone
+            
+            # Insert into scheduled_tasks for background processing
+            self.cursor.execute("""
+                INSERT INTO scheduled_tasks (
+                    name, task_type, schedule_pattern, status, 
+                    last_status, max_concurrent_runs, created_at
+                )
+                VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, NOW()
+                )
+                RETURNING id
+            """, (
+                f"Audio Processing #{uploaded_file_id}",
+                'audio_transcription',
+                '*/1 * * * *',  # Run every minute
+                'active',
+                'ready',
+                1
+            ))
+            
+            job_id = self.cursor.fetchone()[0]
+            
+            # Save job reference in uploaded_files
+            self.cursor.execute("""
+                UPDATE uploaded_files
+                SET processing_status = 'pending',
+                    metadata = metadata || %s::jsonb,
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (
+                json.dumps({
+                    'scheduled_job_id': job_id,
+                    'audio_url': audio_url,
+                    'source_type_id': source_type_id,
+                    'scheduled_at': datetime.now(timezone.utc).isoformat()
+                }),
+                uploaded_file_id
+            ))
+            
+            self.conn.commit()
+            print(f"   ✅ Scheduled job #{job_id} for background processing")
+            
+        except Exception as e:
+            print(f"   ⚠️  Failed to schedule background job: {e}")
+            self.conn.rollback()
+    
     def process_audio(self, file: UploadFile, user_id: Optional[int] = None, source_type_id: int = 6) -> Dict:
         """
         Pipeline: Audio → WAV → S3 → STT → Refiner → Classifier → raw_news
@@ -415,3 +588,104 @@ class AudioInputProcessorV2:
                 self.conn.close()
         except:
             pass
+
+    # ============================================
+    # Helper methods for video_input_processor
+    # ============================================
+
+    def _upload_to_s3(self, file: UploadFile, file_type: str = "audio") -> Dict:
+        """Upload file to S3"""
+        try:
+            if file_type == "video":
+                result = self.s3_uploader.upload_video(file.file, file.filename)
+            else:
+                result = self.s3_uploader.upload_audio(file.file, file.filename)
+            return result
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _save_uploaded_file_metadata(self, original_filename, stored_filename, file_path, file_size, file_type, mime_type):
+        """Save metadata to uploaded_files"""
+        try:
+            import json
+            query = """
+                INSERT INTO uploaded_files (
+                    original_filename, stored_filename, file_path, file_size,
+                    file_type, mime_type, processing_status, retry_count, metadata, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
+                RETURNING id
+            """
+            self.cursor.execute(query, (
+                original_filename, stored_filename, file_path, file_size,
+                file_type, mime_type, 'pending', 0, json.dumps({})
+            ))
+            uploaded_file_id = self.cursor.fetchone()[0]
+            self.conn.commit()
+            return uploaded_file_id
+        except Exception as e:
+            print(f"❌ Save metadata error: {e}")
+            self.conn.rollback()
+            return None
+
+    def _transcribe_audio(self, audio_url: str) -> Dict:
+        """Transcribe audio using STT"""
+        try:
+            result = self.stt_service.transcribe_audio(audio_url)
+            return result
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _refine_text(self, text: str) -> Dict:
+        """Refine text using NewsRefiner"""
+        try:
+            result = self.news_refiner.refine_to_news(text)
+            return result
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _classify_news(self, title: str, content: str):
+        """Classify news using Gemini"""
+        try:
+            category, tags_str, _, _ = classify_with_gemini(title, content)
+            return category, tags_str, None, None
+        except Exception as e:
+            return None, None, None, None
+
+    def _save_to_raw_news(self, title, content, tags, category, uploaded_file_id, original_text, source_type_id):
+        """Save to raw_news"""
+        try:
+            import json
+            self.cursor.execute("SELECT id FROM categories WHERE name = %s", (category,))
+            result = self.cursor.fetchone()
+            category_id = result[0] if result else 7
+
+            query = """
+                INSERT INTO raw_news (
+                    title, content_text, tags, category_id, source_id, language_id,
+                    uploaded_file_id, original_text, source_type_id, metadata, collected_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+                RETURNING id
+            """
+            self.cursor.execute(query, (
+                title, content, tags, category_id, None, 1,
+                uploaded_file_id, original_text, source_type_id,
+                json.dumps({'source_type': 'video'})
+            ))
+            news_id = self.cursor.fetchone()[0]
+            self.conn.commit()
+            return news_id
+        except Exception as e:
+            print(f"❌ Save news error: {e}")
+            self.conn.rollback()
+            return None
+
+    def _update_uploaded_file_status(self, uploaded_file_id, status):
+        """Update status"""
+        try:
+            query = "UPDATE uploaded_files SET processing_status = %s, processed_at = NOW() WHERE id = %s"
+            self.cursor.execute(query, (status, uploaded_file_id))
+            self.conn.commit()
+        except:
+            self.conn.rollback()

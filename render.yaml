@@ -9,7 +9,302 @@
 
 services:
   # ═══════════════════════════════════════════════════════════
-  # 🎯 Full Pipeline Worker Service (Complete Automation)
+  # 🕐 Production Scheduler Service (Task Scheduler)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: production-scheduler
+    
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+    
+    # Scheduler command
+    startCommand: "python scheduler.py"
+    
+    plan: starter
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+    
+    envVars:
+      # Database
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      
+      # Scheduler Configuration
+      - key: SCHEDULER_TICK_INTERVAL
+        value: "5"
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+  # ═══════════════════════════════════════════════════════════
+  # ⚙️ Production Worker Service #1 (Job Executor)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: production-worker-1
+    
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+    
+    # Worker command
+    startCommand: "python worker.py"
+    
+    plan: standard
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+    
+    envVars:
+      # Database
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      
+      # Worker Configuration
+      - key: WORKER_POLL_INTERVAL
+        value: "5"
+      - key: MAX_RETRY_COUNT
+        value: "5"
+      
+      # All other environment variables for jobs
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-2.5-flash-image
+      - key: GEMINI_EXTRACTION_MODEL
+        value: gemini-2.5-flash-lite
+      
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "False"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SECRET_KEY
+        sync: false
+      
+      # Font and Arabic support
+      - key: FONTCONFIG_PATH
+        value: /etc/fonts
+      - key: FC_LANG
+        value: ar
+      
+      # AWS S3
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        value: us-east-1
+      - key: S3_BUCKET_NAME
+        value: media-automation-bucket
+      
+      # S3 Folders
+      - key: S3_ORIGINAL_IMAGES_FOLDER
+        value: original/images/
+      - key: S3_ORIGINAL_VIDEOS_FOLDER
+        value: original/videos/
+      - key: S3_ORIGINAL_AUDIOS_FOLDER
+        value: original/audios/
+      - key: S3_GENERATED_IMAGES_FOLDER
+        value: generated/images/
+      - key: S3_GENERATED_AUDIOS_FOLDER
+        value: generated/audios/
+      - key: S3_GENERATED_VIDEOS_FOLDER
+        value: generated/videos/
+      
+      # Google Cloud
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /app/n8nraghad-7fc0064b9857.json
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      
+      # Facebook
+      - key: FB_GAZA_ACCESS_TOKEN
+        sync: false
+      - key: FB_GAZA_PAGE_ID
+        value: "893918783798150"
+      - key: FB_DOT_ACCESS_TOKEN
+        sync: false
+      - key: FB_DOT_PAGE_ID
+        value: "847928151740253"
+      
+      # Instagram
+      - key: IG_GAZA_USER_ID
+        value: "17841477381900896"
+      - key: FB_gaza_ACCESS_TOKEN
+        sync: false
+      
+      # Telegram
+      - key: TG_BOT_TOKEN
+        sync: false
+      - key: TG_CHAT_ID
+        value: "-1003517881817"
+      
+      # API
+      - key: API_BASE_URL
+        value: https://automation-copy-v2-api.onrender.com
+      
+      # Python/Docker
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /ms-playwright
+
+  # ═══════════════════════════════════════════════════════════
+  # ⚙️ Production Worker Service #2 (Job Executor)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: production-worker-2
+    
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+    
+    # Worker command
+    startCommand: "python worker.py"
+    
+    plan: standard
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+    
+    envVars:
+      # Database
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      
+      # Worker Configuration
+      - key: WORKER_POLL_INTERVAL
+        value: "5"
+      - key: MAX_RETRY_COUNT
+        value: "5"
+      
+      # All other environment variables for jobs (same as worker-1)
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-2.5-flash-image
+      - key: GEMINI_EXTRACTION_MODEL
+        value: gemini-2.5-flash-lite
+      
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "False"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SECRET_KEY
+        sync: false
+      
+      # Font and Arabic support
+      - key: FONTCONFIG_PATH
+        value: /etc/fonts
+      - key: FC_LANG
+        value: ar
+      
+      # AWS S3
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        value: us-east-1
+      - key: S3_BUCKET_NAME
+        value: media-automation-bucket
+      
+      # S3 Folders
+      - key: S3_ORIGINAL_IMAGES_FOLDER
+        value: original/images/
+      - key: S3_ORIGINAL_VIDEOS_FOLDER
+        value: original/videos/
+      - key: S3_ORIGINAL_AUDIOS_FOLDER
+        value: original/audios/
+      - key: S3_GENERATED_IMAGES_FOLDER
+        value: generated/images/
+      - key: S3_GENERATED_AUDIOS_FOLDER
+        value: generated/audios/
+      - key: S3_GENERATED_VIDEOS_FOLDER
+        value: generated/videos/
+      
+      # Google Cloud
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /app/n8nraghad-7fc0064b9857.json
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      
+      # Facebook
+      - key: FB_GAZA_ACCESS_TOKEN
+        sync: false
+      - key: FB_GAZA_PAGE_ID
+        value: "893918783798150"
+      - key: FB_DOT_ACCESS_TOKEN
+        sync: false
+      - key: FB_DOT_PAGE_ID
+        value: "847928151740253"
+      
+      # Instagram
+      - key: IG_GAZA_USER_ID
+        value: "17841477381900896"
+      - key: FB_gaza_ACCESS_TOKEN
+        sync: false
+      
+      # Telegram
+      - key: TG_BOT_TOKEN
+        sync: false
+      - key: TG_CHAT_ID
+        value: "-1003517881817"
+      
+      # API
+      - key: API_BASE_URL
+        value: https://automation-copy-v2-api.onrender.com
+      
+      # Python/Docker
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /ms-playwright
+
+  # ═══════════════════════════════════════════════════════════
+  # 🎯 Legacy Full Pipeline Worker Service (Backup/Fallback)
   # ═══════════════════════════════════════════════════════════
   - type: worker
     name: automation-pipeline-worker
@@ -179,7 +474,7 @@ services:
       
       # API
       - key: API_BASE_URL
-        value: https://news-api-ydc8.onrender.com
+        value: https://automation-copy-v2-api.onrender.com
       
       # Python/Docker
       - key: PYTHONPATH
@@ -188,3 +483,156 @@ services:
         value: "1"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: /ms-playwright
+
+  # ═══════════════════════════════════════════════════════════
+  # ⚙️ Production Worker Service #3 (Job Executor)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: production-worker-3
+    
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+    
+    startCommand: "python worker.py"
+    
+    plan: standard
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+    
+    envVars:
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      - key: WORKER_POLL_INTERVAL
+        value: "3"
+      - key: MAX_RETRY_COUNT
+        value: "5"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET_NAME
+        value: media-automation-bucket
+
+  # ═══════════════════════════════════════════════════════════
+  # ⚙️ Production Worker Service #4 (Job Executor)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: production-worker-4
+    
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+    
+    startCommand: "python worker.py"
+    
+    plan: standard
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+    
+    envVars:
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      - key: WORKER_POLL_INTERVAL
+        value: "3"
+      - key: MAX_RETRY_COUNT
+        value: "5"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET_NAME
+        value: media-automation-bucket
+
+  # ═══════════════════════════════════════════════════════════
+  # ⚙️ Production Worker Service #5 (Job Executor)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: production-worker-5
+    
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+    
+    startCommand: "python worker.py"
+    
+    plan: standard
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+    
+    envVars:
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      - key: WORKER_POLL_INTERVAL
+        value: "3"
+      - key: MAX_RETRY_COUNT
+        value: "5"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET_NAME
+        value: media-automation-bucket

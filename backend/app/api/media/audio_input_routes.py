@@ -85,7 +85,7 @@ def _build_error_response(message: str, step: Optional[str] = None, uploaded_fil
 @router.post(
     "/upload",
     summary="Upload audio file",
-    description="Upload an audio file and process it into a news item",
+    description="Upload an audio file. Processing happens in background. Returns 200 immediately.",
     status_code=status.HTTP_200_OK
 )
 async def upload_audio(
@@ -93,15 +93,17 @@ async def upload_audio(
     user_id: Optional[int] = None
 ):
     """
-    Audio Upload Endpoint
-    source_type_id = 6 (Audio Upload)
+    Audio Upload Endpoint (Async)
+    - Saves file to S3
+    - Returns 200 immediately
+    - Processing happens in background (STT, classification, etc.)
     """
     _validate_audio_file(file)
 
     processor = AudioInputProcessor()
 
     try:
-        result = processor.process_audio(
+        result = processor.process_audio_async(
             file=file,
             user_id=user_id,
             source_type_id=6
@@ -168,3 +170,61 @@ async def record_audio(
 
     finally:
         processor.close()
+
+
+@router.get(
+    "/status/{uploaded_file_id}",
+    summary="Check processing status",
+    description="Check the status of audio processing"
+)
+async def check_audio_status(uploaded_file_id: int):
+    """
+    Check processing status for uploaded audio file
+    """
+    try:
+        processor = AudioInputProcessor()
+        
+        # Get status from database
+        processor.cursor.execute("""
+            SELECT 
+                id, 
+                original_filename, 
+                processing_status, 
+                error_message,
+                transcription,
+                created_at,
+                processed_at
+            FROM uploaded_files
+            WHERE id = %s
+        """, (uploaded_file_id,))
+        
+        row = processor.cursor.fetchone()
+        processor.close()
+        
+        if not row:
+            return {
+                "success": False,
+                "error": "File not found",
+                "data": None
+            }
+        
+        return {
+            "success": True,
+            "data": {
+                "uploaded_file_id": row[0],
+                "filename": row[1],
+                "status": row[2],
+                "error": row[3],
+                "transcription": row[4],
+                "created_at": row[5].isoformat() if row[5] else None,
+                "processed_at": row[6].isoformat() if row[6] else None
+            },
+            "error": None
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "data": None
+        }
