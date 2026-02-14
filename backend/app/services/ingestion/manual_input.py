@@ -74,8 +74,8 @@ VALID_CATEGORIES = [
     'تكنولوجيا',  # Technology
     'صحة',        # Health
     'ثقافة',      # Culture
-    'محلي',       # Local
-    'دولي',       # International
+    'محلي',       # Local (Palestinian territories only)
+    'دولي',       # International politics/diplomacy
     'عسكري',      # Military
     'اجتماعي',    # Social
     'فن',         # Art

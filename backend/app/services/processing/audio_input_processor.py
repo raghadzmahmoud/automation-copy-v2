@@ -15,6 +15,7 @@ from fastapi import UploadFile
 
 # Import our services
 from app.utils.s3_uploader import S3Uploader
+from app.utils.audio_converter import AudioConverter
 from app.services.generators.stt_service import STTService
 from app.services.processing.news_refiner import NewsRefiner
 from app.services.processing.classifier import classify_with_gemini
@@ -52,6 +53,13 @@ class AudioInputProcessor:
             print("✅ S3Uploader ready")
         except Exception as e:
             print(f"❌ S3Uploader failed: {e}")
+            raise
+        
+        try:
+            self.audio_converter = AudioConverter()
+            print("✅ AudioConverter ready")
+        except Exception as e:
+            print(f"❌ AudioConverter failed: {e}")
             raise
         
         try:
@@ -122,9 +130,77 @@ class AudioInputProcessor:
                 file.file = BytesIO(content)
             
             # ========================================
+            # Detect mime_type FIRST (before upload)
+            # ========================================
+            mime_type = file.content_type if file.content_type else self._detect_mime_type(file.filename)
+            print(f"\n📋 File Info:")
+            print(f"   Filename: {file.filename}")
+            print(f"   MIME Type: {mime_type}")
+            print(f"   Size: {file_size} bytes")
+            
+            # ========================================
             # Step 1: رفع الملف على S3
             # ========================================
             print("\n📤 Step 1: Uploading to S3...")
+            
+            # Check if audio needs conversion before upload
+            if mime_type and self.audio_converter.needs_conversion(mime_type):
+                print(f"   🔄 Converting {mime_type} to WAV before upload...")
+                
+                # Read file content
+                file.file.seek(0)
+                file_content = file.file.read()
+                file.file.seek(0)
+                
+                # Save to temp file
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+                    temp_file.write(file_content)
+                    temp_path = temp_file.name
+                
+                # Convert to WAV
+                try:
+                    import subprocess
+                    wav_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                    wav_path = wav_temp.name
+                    wav_temp.close()
+                    
+                    cmd = [
+                        self.audio_converter.ffmpeg_path,
+                        '-i', temp_path,
+                        '-ar', '16000',        # 16kHz
+                        '-ac', '1',            # mono
+                        '-acodec', 'pcm_s16le',  # LINEAR16
+                        '-y',
+                        wav_path
+                    ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, timeout=60)
+                    
+                    if result.returncode == 0:
+                        # Read converted WAV
+                        with open(wav_path, 'rb') as f:
+                            wav_content = f.read()
+                        
+                        # Update file object
+                        from io import BytesIO
+                        file.file = BytesIO(wav_content)
+                        file.filename = file.filename.rsplit('.', 1)[0] + '.wav'
+                        mime_type = 'audio/wav'
+                        file_size = len(wav_content)
+                        
+                        print(f"   ✅ Converted to WAV: {len(wav_content)} bytes")
+                    else:
+                        print(f"   ⚠️  Conversion failed, uploading original")
+                    
+                    # Cleanup
+                    import os
+                    os.unlink(temp_path)
+                    os.unlink(wav_path)
+                    
+                except Exception as e:
+                    print(f"   ⚠️  Conversion error: {e}, uploading original")
+            
             upload_result = self._upload_to_s3(file)
             
             if not upload_result['success']:
@@ -140,10 +216,8 @@ class AudioInputProcessor:
             # Extract stored filename from s3_key
             stored_filename = s3_key.split('/')[-1]
             
-            # Detect mime_type from filename
-            mime_type = self._detect_mime_type(file.filename)
-            
             print(f"✅ Uploaded: {audio_url}")
+            print(f"📋 Stored Filename: {stored_filename}")
             
             # ========================================
             # Step 2: حفظ metadata في uploaded_files
@@ -152,7 +226,7 @@ class AudioInputProcessor:
             uploaded_file_id = self._save_uploaded_file_metadata(
                 original_filename=file.filename,
                 stored_filename=stored_filename,
-                file_path=s3_key,
+               file_path=audio_url,
                 file_size=file_size,
                 file_type='audio',
                 mime_type=mime_type
@@ -171,14 +245,24 @@ class AudioInputProcessor:
             # Step 3: تحويل الصوت إلى نص (STT)
             # ========================================
             print("\n🎙️ Step 3: Speech-to-Text...")
+            print(f"   📋 Audio URL: {audio_url}")
+            print(f"   📋 MIME Type: {mime_type}")
+            
+            # Call STT without mime_type (same as video processor)
+            # The STT service will detect format from URL extension
             stt_result = self._transcribe_audio(audio_url)
             
             if not stt_result['success']:
-                # Update status
-                self._update_uploaded_file_status(uploaded_file_id, 'failed')
+                # Update status with error details
+                error_msg = stt_result.get('error', 'Unknown STT error')
+                print(f"❌ STT Failed: {error_msg}")
+                
+                # Save error to metadata
+                self._update_uploaded_file_error(uploaded_file_id, 'failed', error_msg)
+                
                 return {
                     'success': False,
-                    'error': f"فشل STT: {stt_result.get('error')}",
+                    'error': f"فشل STT: {error_msg}",
                     'step': 'stt',
                     'uploaded_file_id': uploaded_file_id
                 }
@@ -197,10 +281,12 @@ class AudioInputProcessor:
             refine_result = self._refine_text(transcription)
             
             if not refine_result['success']:
-                self._update_uploaded_file_status(uploaded_file_id, 'failed')
+                error_msg = refine_result.get('error', 'Unknown refiner error')
+                print(f"❌ Refiner Failed: {error_msg}")
+                self._update_uploaded_file_error(uploaded_file_id, 'failed', error_msg)
                 return {
                     'success': False,
-                    'error': f"فشل Refiner: {refine_result.get('error')}",
+                    'error': f"فشل Refiner: {error_msg}",
                     'step': 'refiner',
                     'uploaded_file_id': uploaded_file_id
                 }
@@ -404,16 +490,91 @@ class AudioInputProcessor:
             print(f"⚠️  Error updating status: {e}")
             self.conn.rollback()
     
-    def _transcribe_audio(self, audio_url: str) -> Dict:
-        """تحويل الصوت إلى نص"""
+    def _update_uploaded_file_error(self, uploaded_file_id: int, status: str, error_message: str):
+        """تحديث حالة المعالجة مع رسالة الخطأ"""
         try:
-            result = self.stt_service.transcribe_audio(audio_url)
-            return result
+            import json
+            
+            # Get current metadata
+            query = "SELECT metadata FROM uploaded_files WHERE id = %s"
+            self.cursor.execute(query, (uploaded_file_id,))
+            result = self.cursor.fetchone()
+            
+            metadata = {}
+            if result and result[0]:
+                metadata = result[0] if isinstance(result[0], dict) else json.loads(result[0])
+            
+            # Add error to metadata
+            metadata['error'] = error_message
+            metadata['error_timestamp'] = datetime.now().isoformat()
+            
+            # Update with error
+            query = """
+                UPDATE uploaded_files
+                SET processing_status = %s,
+                    metadata = %s::jsonb,
+                    processed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+            """
+            
+            self.cursor.execute(query, (status, json.dumps(metadata), uploaded_file_id))
+            self.conn.commit()
+            
+            print(f"   💾 Error saved to metadata: {error_message}")
+            
         except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
+            print(f"⚠️  Error updating status with error: {e}")
+            self.conn.rollback()
+    
+    def _transcribe_audio(self, audio_url: str, mime_type: str = None) -> Dict:
+        """
+        تحويل الصوت إلى نص - مع دعم WebM
+        """
+        
+        try:
+            # Check if needs conversion
+            if mime_type and self.audio_converter.needs_conversion(mime_type):
+                print(f"   🔄 Converting {mime_type} to WAV...")
+                
+                # Convert
+                wav_data = self.audio_converter.convert_to_wav(audio_url)
+                
+                if not wav_data:
+                    print(f"   ❌ Conversion failed for {mime_type}")
+                    return {'success': False, 'error': 'Audio conversion failed'}
+                
+                print(f"   ✅ Conversion successful")
+                
+                # Upload converted
+                from fastapi import UploadFile
+                wav_file = UploadFile(filename='converted.wav', file=wav_data)
+                upload_result = self._upload_to_s3(wav_file, file_type='audio')
+                
+                if not upload_result.get('success'):
+                    print(f"   ❌ Failed to upload converted audio")
+                    return {'success': False, 'error': 'Failed to upload converted audio'}
+                
+                # Use converted URL
+                audio_url = upload_result['url']
+                print(f"   ✅ Converted audio uploaded: {audio_url}")
+            
+            # Transcribe (original or converted)
+            print(f"   🎙️ Transcribing audio from: {audio_url}")
+            result = self.stt_service.transcribe_audio(audio_url)
+            
+            if result.get('success'):
+                print(f"   ✅ Transcription successful")
+            else:
+                print(f"   ❌ Transcription failed: {result.get('error')}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"   ❌ Exception in _transcribe_audio: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'success': False, 'error': str(e)}
     
     def _refine_text(self, raw_text: str) -> Dict:
         """تحسين النص العامي إلى خبر احترافي"""

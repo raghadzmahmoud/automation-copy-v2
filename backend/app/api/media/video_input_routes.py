@@ -82,7 +82,7 @@ def _build_error_response(message: str, step: Optional[str] = None):
 @router.post(
     "/upload",
     summary="Upload video file",
-    description="Upload a video file and process it into a news item",
+    description="Upload a video file. Processing happens in background. Returns 200 immediately.",
     status_code=status.HTTP_200_OK
 )
 async def upload_video(
@@ -90,15 +90,18 @@ async def upload_video(
     user_id: Optional[int] = None
 ):
     """
-    Video Upload Endpoint
-    source_type_id = 8 (Video Upload)
+    Video Upload Endpoint (Async)
+    - Saves video to S3
+    - Extracts audio
+    - Returns 200 immediately
+    - Processing happens in background (STT, classification, etc.)
     """
     _validate_video_file(file)
 
     processor = VideoInputProcessor()
 
     try:
-        result = processor.process_video(
+        result = processor.process_video_async(
             file=file,
             user_id=user_id,
             source_type_id=8
@@ -161,3 +164,60 @@ async def record_video(
 
     finally:
         processor.close()
+
+
+@router.get(
+    "/status/{uploaded_file_id}",
+    summary="Check processing status",
+    description="Check the status of video processing"
+)
+async def check_video_status(uploaded_file_id: int):
+    """
+    Check processing status for uploaded video file
+    """
+    try:
+        processor = VideoInputProcessor()
+        
+        processor.cursor.execute("""
+            SELECT 
+                id, 
+                original_filename, 
+                processing_status, 
+                error_message,
+                transcription,
+                created_at,
+                processed_at
+            FROM uploaded_files
+            WHERE id = %s
+        """, (uploaded_file_id,))
+        
+        row = processor.cursor.fetchone()
+        processor.close()
+        
+        if not row:
+            return {
+                "success": False,
+                "error": "File not found",
+                "data": None
+            }
+        
+        return {
+            "success": True,
+            "data": {
+                "uploaded_file_id": row[0],
+                "filename": row[1],
+                "status": row[2],
+                "error": row[3],
+                "transcription": row[4],
+                "created_at": row[5].isoformat() if row[5] else None,
+                "processed_at": row[6].isoformat() if row[6] else None
+            },
+            "error": None
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "data": None
+        }

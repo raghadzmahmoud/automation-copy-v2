@@ -54,7 +54,7 @@ temp/
 README.md
 *.md
 
-# Test files
+# Test files (all removed for production)
 test_*.py
 *_test.py
 tests/

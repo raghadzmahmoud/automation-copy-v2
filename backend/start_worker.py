@@ -1,465 +1,387 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Multi-Threaded Task Scheduler
+🔄 Sequential Task Scheduler
 ═══════════════════════════════════════════════════════════════
-Each task runs independently in its own thread with fixed intervals
-When a task finishes, it starts a timer to run again after its interval
-No database dependency for task configuration
+يشغل الـ jobs بالترتيب بدل parallel
+أفضل للموارد المحدودة ويضمن الترتيب الصحيح
+
+Flow:
+┌─────────────────────────────────────────────────────────────┐
+│  Loop كل 2 دقيقة:                                           │
+│                                                             │
+│  1. 📥 Scraping (كل cycle)                                  │
+│  2. 🔄 Processing: cluster → report → social (كل cycle)     │
+│  3. 🎨 Media: image → audio (كل cycle ثاني)                 │
+│  4. 📤 Publishing: social_img → reel → publish (كل 3 cycles)│
+│  5. 📻 Broadcast (كل 3 cycles)                              │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ═══════════════════════════════════════════════════════════════
 """
 
-import certifi
 import os
-import psycopg2
-import logging
-import time
-import threading
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Callable
-from settings import DB_CONFIG
 import sys
+import time
 import signal
+import logging
 import traceback
+from datetime import datetime, timezone
+from typing import Dict, Optional
 
-# Job imports
-from app.jobs.scraper_job import scrape_news
-from app.jobs.clustering_job import cluster_news
-from app.jobs.reports_job import generate_reports
-from app.jobs.image_generation_job import generate_images
-from app.jobs.audio_generation_job import generate_audio
-from app.jobs.broadcast_job import generate_all_broadcasts  # ✅ تم التغيير
-from app.jobs.social_media_job import generate_social_media_content
-from app.jobs.social_media_image_job import generate_social_media_images
-from app.jobs.reel_generation_job import generate_reels
+import certifi
+import psycopg2
 
-# Set SSL certificate environment variable
+# Set SSL certificate
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
+# Add path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from settings import DB_CONFIG
+
+# ═══════════════════════════════════════════════════════════════
+# Logging Setup
+# ═══════════════════════════════════════════════════════════════
+
+log_dir = 'logs'
+os.makedirs(log_dir, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(f'{log_dir}/worker.log', encoding='utf-8')
+    ]
+)
 logger = logging.getLogger(__name__)
 
 
-# ============================================
-# Configuration
-# ============================================
+# ═══════════════════════════════════════════════════════════════
+# Job Imports (Lazy Loading)
+# ═══════════════════════════════════════════════════════════════
 
-# Task configuration: function and interval in one place
-TASKS = {
-    'scraping': {
-        'func': scrape_news,
-        'interval': 600,              # 10 minutes
-    },
-    'clustering': {
-        'func': cluster_news,
-        'interval': 1000,              
-    },
-    'report_generation': {
-        'func': generate_reports,
-        'interval': 1300,             
-    },
-    'image_generation': {
-        'func': generate_images,
-        'interval': 1800,             
-    },
-    'audio_generation': {
-        'func': generate_audio,
-        'interval': 1800,             
-    },
-    # ═══════════════════════════════════════════════════════════
-    # ✅ تم التغيير: نظام البث الموحد بدل bulletin_generation و digest_generation
-    # يفحص broadcast_configs ويولد حسب period_hours + صوت تلقائي
-    # ═══════════════════════════════════════════════════════════
-    'broadcast_generation': {
-        'func': generate_all_broadcasts,
-        'interval': 1800,             # 30 minutes
-    },
-    'social_media_generation': {
-        'func': generate_social_media_content,
-        'interval': 1800,             
-    },
-    'social_media_image_generation': {
-        'func': generate_social_media_images,
-        'interval': 2000,             
-    },
-    'reel_generation': {
-        'func': generate_reels,
-        'interval': 2000,             
-    }
+def import_jobs():
+    """Import all job functions"""
+    global scrape_news, cluster_news, generate_reports
+    global generate_social_media_content, generate_images, generate_audio
+    global generate_social_media_images, generate_reels, publish_to_social_media
+    global generate_all_broadcasts
+    
+    from app.jobs.scraper_job import scrape_news
+    from app.jobs.clustering_job import cluster_news
+    from app.jobs.reports_job import generate_reports
+    from app.jobs.social_media_job import generate_social_media_content
+    from app.jobs.image_generation_job import generate_images
+    from app.jobs.audio_generation_job import generate_audio
+    from app.jobs.social_media_image_job import generate_social_media_images
+    from app.jobs.reel_generation_job import generate_reels
+    from app.jobs.publishers_job import publish_to_social_media
+    from app.jobs.broadcast_job import generate_all_broadcasts
+    
+    logger.info("✅ All jobs imported successfully")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Configuration
+# ═══════════════════════════════════════════════════════════════
+
+# الفترة الأساسية بين الدورات (بالثواني)
+BASE_CYCLE_INTERVAL = int(os.getenv('CYCLE_INTERVAL', 120))  # 2 دقيقة default
+
+# كل كم دورة يشتغل كل group
+CYCLE_CONFIG = {
+    'scraping': 1,           # كل دورة (كل 2 دق)
+    'processing': 1,         # كل دورة (كل 2 دق)
+    'media_generation': 2,   # كل دورتين (كل 4 دق)
+    'publishing': 3,         # كل 3 دورات (كل 6 دق)
+    'broadcast': 3,          # كل 3 دورات (كل 6 دق)
 }
 
-# Task functions mapping (populated from TASKS)
-TASK_FUNCTIONS: Dict[str, Callable] = {}
 
-# Scheduler state
-scheduler_running = False
-task_threads: Dict[str, threading.Thread] = {}
-task_stop_flags: Dict[str, threading.Event] = {}
-task_last_run: Dict[str, datetime] = {}
-scheduler_lock = threading.Lock()
+# ═══════════════════════════════════════════════════════════════
+# Job Execution
+# ═══════════════════════════════════════════════════════════════
 
-
-def register_all_tasks():
-    """Register all task functions from TASKS configuration"""
-    for task_type, task_config in TASKS.items():
-        TASK_FUNCTIONS[task_type] = task_config['func']
-        logger.info(f"Registered: {task_type}")
-
-
-# ============================================
-# Database Functions (for logging only)
-# ============================================
-
-def get_db_connection():
-    """Create database connection"""
-    try:
-        return psycopg2.connect(**DB_CONFIG)
-    except Exception as e:
-        logger.error(f"Database connection failed: {e}")
-        return None
-
-
-def update_task_last_run(task_type: str):
-    """Update last_run_at for a task (optional, for logging)"""
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE scheduled_tasks 
-            SET last_run_at = %s
-            WHERE task_type = %s
-        """, (datetime.now(timezone.utc), task_type))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-    except Exception as e:
-        # Silently fail if table doesn't exist or task not in DB
-        if conn:
-            conn.rollback()
-            conn.close()
-
-
-def log_task_execution(task_type: str, status: str, duration: float = 0, error: str = None):
-    """Log task execution (optional, for logging)"""
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    try:
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "SELECT id FROM scheduled_tasks WHERE task_type = %s",
-            (task_type,)
-        )
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
-            return
-        
-        cursor.execute("""
-            INSERT INTO scheduled_task_logs 
-            (scheduled_task_id, status, execution_time_seconds, error_message, executed_at)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (row[0], status, duration, error, datetime.now(timezone.utc)))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-    except Exception as e:
-        # Silently fail if table doesn't exist
-        if conn:
-            conn.close()
-
-
-# ============================================
-# Task Execution
-# ============================================
-
-def execute_task(task_type: str) -> Dict:
+def run_job(name: str, func, skip_on_error: bool = True) -> Dict:
     """
-    Execute a single task
-    Returns: {'success': bool, 'duration': float, 'error': str|None}
-    """
-    if task_type not in TASK_FUNCTIONS:
-        logger.error(f"Unknown task: {task_type}")
-        return {'success': False, 'duration': 0, 'error': 'Unknown task'}
+    تشغيل job واحد مع logging
     
-    logger.info(f"[{task_type}] Starting execution...")
+    Args:
+        name: اسم الـ job للـ logging
+        func: الدالة اللي تشغلها
+        skip_on_error: تكمل حتى لو فشل؟
+    
+    Returns:
+        dict: نتيجة التشغيل
+    """
+    logger.info(f"▶️  Starting: {name}")
     start_time = datetime.now()
     
     try:
-        # Execute the task
-        result = TASK_FUNCTIONS[task_type]()
-        
+        result = func()
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"[{task_type}] Completed in {duration:.2f}s")
         
-        # Update database (optional, for logging)
-        update_task_last_run(task_type)
-        log_task_execution(task_type, 'completed', duration)
-        
-        # Update last run time in memory
-        with scheduler_lock:
-            task_last_run[task_type] = datetime.now(timezone.utc)
+        if result.get('skipped'):
+            logger.info(f"⏭️  {name}: Skipped ({result.get('reason', 'no reason')})")
+        elif result.get('error'):
+            logger.error(f"❌ {name}: Error - {result.get('error')}")
+        else:
+            logger.info(f"✅ {name}: Completed in {duration:.1f}s")
         
         return {
-            'success': True,
+            'success': not result.get('error'),
+            'skipped': result.get('skipped', False),
             'duration': duration,
-            'error': None,
             'result': result
         }
         
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
-        error_msg = str(e)
-        logger.error(f"[{task_type}] Failed: {error_msg}")
+        logger.error(f"❌ {name}: Exception - {e}")
         
-        traceback.print_exc()
-        
-        log_task_execution(task_type, 'failed', duration, error_msg)
+        if not skip_on_error:
+            raise
         
         return {
             'success': False,
+            'skipped': False,
             'duration': duration,
-            'error': error_msg
+            'error': str(e)
         }
 
 
-# ============================================
-# Task Thread Functions
-# ============================================
-
-def task_thread_loop(task_type: str, interval_seconds: int):
+def run_group(group_name: str, jobs: list) -> Dict:
     """
-    Main loop for a single task thread
-    Pattern: Run task -> Wait interval -> Repeat
-    When task finishes, timer starts immediately for next run
+    تشغيل مجموعة jobs بالترتيب
+    
+    Args:
+        group_name: اسم المجموعة
+        jobs: قائمة (name, func) للـ jobs
+    
+    Returns:
+        dict: نتائج كل الـ jobs
     """
-    logger.info(f"[{task_type}] Thread started with interval: {interval_seconds}s ({interval_seconds//60}min)")
+    logger.info(f"\n{'─'*60}")
+    logger.info(f"🔷 GROUP: {group_name}")
+    logger.info(f"{'─'*60}")
     
-    stop_flag = task_stop_flags.get(task_type)
-    if not stop_flag:
-        logger.error(f"[{task_type}] No stop flag found!")
-        return
+    group_start = datetime.now()
+    results = {}
     
-    while not stop_flag.is_set():
-        try:
-            # Execute the task
-            execute_task(task_type)
-            
-            # After task finishes, wait for interval before next run
-            # Timer starts immediately after task completion
-            logger.info(f"[{task_type}] Waiting {interval_seconds}s ({interval_seconds//60}min) until next run...")
-            
-            # Wait for interval (checking stop flag every second)
-            for _ in range(interval_seconds):
-                if stop_flag.is_set():
-                    logger.info(f"[{task_type}] Thread stopped")
-                    return
-                time.sleep(1)
-                
-        except Exception as e:
-            logger.error(f"[{task_type}] Thread error: {e}")
-            traceback.print_exc()
-            
-            # Wait 30 seconds before retrying on error
-            logger.info(f"[{task_type}] Retrying in 30 seconds...")
-            for _ in range(30):
-                if stop_flag.is_set():
-                    return
-                time.sleep(1)
-    
-    logger.info(f"[{task_type}] Thread ended")
-
-
-# ============================================
-# Scheduler Control
-# ============================================
-
-def start_scheduler():
-    """Start the multi-threaded scheduler"""
-    global scheduler_running, task_threads, task_stop_flags
-    
-    if scheduler_running:
-        logger.warning("Scheduler already running!")
-        return False
-    
-    logger.info("=" * 70)
-    logger.info("Starting Multi-Threaded Task Scheduler...")
-    logger.info("=" * 70)
-    
-    # Register all tasks
-    register_all_tasks()
-    
-    if not TASK_FUNCTIONS:
-        logger.warning("No tasks registered!")
-        return False
-    
-    # Initialize task threads for all registered tasks
-    scheduler_running = True
-    
-    for task_type, task_config in TASKS.items():
-        # Get interval and function from TASKS configuration
-        interval = task_config['interval']
-        task_func = task_config['func']
+    for job_name, job_func in jobs:
+        results[job_name] = run_job(job_name, job_func)
         
-        # Create stop flag for this task
-        task_stop_flags[task_type] = threading.Event()
-        
-        # Start thread for this task
-        thread = threading.Thread(
-            target=task_thread_loop,
-            args=(task_type, interval),
-            daemon=True,
-            name=f"Task-{task_type}"
-        )
-        thread.start()
-        task_threads[task_type] = thread
-        
-        logger.info(f"[{task_type}] Started (interval: {interval}s = {interval//60}min)")
+        # فترة راحة قصيرة بين الـ jobs
+        time.sleep(2)
     
-    logger.info("=" * 70)
-    logger.info(f"Scheduler started with {len(task_threads)} task threads")
-    logger.info("=" * 70)
+    group_duration = (datetime.now() - group_start).total_seconds()
+    logger.info(f"🔷 GROUP {group_name} completed in {group_duration:.1f}s")
     
-    return True
+    return results
 
 
-def stop_scheduler():
-    """Stop the scheduler gracefully"""
-    global scheduler_running, task_threads, task_stop_flags
-    
-    if not scheduler_running:
-        logger.warning("Scheduler not running!")
-        return False
-    
-    logger.info("Stopping scheduler...")
-    
-    # Set all stop flags
-    for task_type, stop_flag in task_stop_flags.items():
-        logger.info(f"[{task_type}] Stopping...")
-        stop_flag.set()
-    
-    # Wait for threads to finish (with timeout)
-    for task_type, thread in task_threads.items():
-        thread.join(timeout=30)
-        if thread.is_alive():
-            logger.warning(f"[{task_type}] Thread did not stop within timeout")
-        else:
-            logger.info(f"[{task_type}] Thread stopped")
-    
-    scheduler_running = False
-    task_threads.clear()
-    task_stop_flags.clear()
-    task_last_run.clear()
-    
-    logger.info("Scheduler stopped!")
-    return True
+# ═══════════════════════════════════════════════════════════════
+# Main Cycle
+# ═══════════════════════════════════════════════════════════════
 
-
-def get_scheduler_status() -> Dict:
-    """Get current scheduler status"""
-    with scheduler_lock:
-        task_statuses = {}
-        for task_type in task_threads.keys():
-            thread = task_threads.get(task_type)
-            stop_flag = task_stop_flags.get(task_type)
-            interval = TASKS.get(task_type, {}).get('interval', 3600)
-            
-            task_statuses[task_type] = {
-                'running': thread.is_alive() if thread else False,
-                'interval_seconds': interval,
-                'interval_minutes': interval // 60,
-                'last_run': task_last_run.get(task_type),
-                'stopped': stop_flag.is_set() if stop_flag else True
-            }
+def run_cycle(cycle_number: int) -> Dict:
+    """
+    تشغيل دورة كاملة
+    
+    Args:
+        cycle_number: رقم الدورة (يبدأ من 1)
+    
+    Returns:
+        dict: نتائج الدورة
+    """
+    cycle_start = datetime.now()
+    
+    logger.info("\n" + "═"*70)
+    logger.info(f"🔄 CYCLE #{cycle_number} started at {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("═"*70)
+    
+    results = {}
+    
+    # ───────────────────────────────────────────────────────────
+    # Group 1: Data Ingestion (Scraping)
+    # يشتغل كل دورة
+    # ───────────────────────────────────────────────────────────
+    if cycle_number % CYCLE_CONFIG['scraping'] == 0:
+        results['scraping'] = run_group('DATA INGESTION', [
+            ('scraping', scrape_news),
+        ])
+    
+    # ───────────────────────────────────────────────────────────
+    # Group 2: Processing (Cluster → Report → Social Text)
+    # يشتغل كل دورة
+    # ───────────────────────────────────────────────────────────
+    if cycle_number % CYCLE_CONFIG['processing'] == 0:
+        results['processing'] = run_group('PROCESSING', [
+            ('clustering', cluster_news),
+            ('reports', generate_reports),
+            ('social_media_text', generate_social_media_content),
+        ])
+    
+    # ───────────────────────────────────────────────────────────
+    # Group 3: Media Generation (Image + Audio)
+    # يشتغل كل دورتين
+    # ───────────────────────────────────────────────────────────
+    if cycle_number % CYCLE_CONFIG['media_generation'] == 0:
+        results['media'] = run_group('MEDIA GENERATION', [
+            ('images', generate_images),
+            ('audio', generate_audio),
+        ])
+    
+    # ───────────────────────────────────────────────────────────
+    # Group 4: Publishing (Social Image → Reel → Publish)
+    # يشتغل كل 3 دورات
+    # ───────────────────────────────────────────────────────────
+    if cycle_number % CYCLE_CONFIG['publishing'] == 0:
+        results['publishing'] = run_group('PUBLISHING', [
+            ('social_media_images', generate_social_media_images),
+            ('reels', generate_reels),
+            ('publishers', publish_to_social_media),
+        ])
+    
+    # ───────────────────────────────────────────────────────────
+    # Group 5: Broadcast (Bulletin + Digest)
+    # يشتغل كل 3 دورات
+    # ───────────────────────────────────────────────────────────
+    if cycle_number % CYCLE_CONFIG['broadcast'] == 0:
+        results['broadcast'] = run_group('BROADCAST', [
+            ('broadcast', generate_all_broadcasts),
+        ])
+    
+    # ───────────────────────────────────────────────────────────
+    # Summary
+    # ───────────────────────────────────────────────────────────
+    cycle_duration = (datetime.now() - cycle_start).total_seconds()
+    
+    logger.info("\n" + "═"*70)
+    logger.info(f"📊 CYCLE #{cycle_number} Summary")
+    logger.info("═"*70)
+    logger.info(f"Duration: {cycle_duration:.1f}s ({cycle_duration/60:.1f} min)")
+    
+    for group_name, group_results in results.items():
+        logger.info(f"\n  {group_name}:")
+        for job_name, job_result in group_results.items():
+            if job_result.get('skipped'):
+                status = "⏭️"
+            elif job_result.get('success'):
+                status = "✅"
+            else:
+                status = "❌"
+            logger.info(f"    {status} {job_name}: {job_result.get('duration', 0):.1f}s")
+    
+    logger.info("═"*70 + "\n")
     
     return {
-        'scheduler_running': scheduler_running,
-        'active_tasks': len(task_threads),
-        'tasks': task_statuses
+        'cycle': cycle_number,
+        'duration': cycle_duration,
+        'results': results
     }
 
 
-# ============================================
-# Manual Controls
-# ============================================
+# ═══════════════════════════════════════════════════════════════
+# Main Loop
+# ═══════════════════════════════════════════════════════════════
 
-def run_single_task(task_type: str) -> Dict:
-    """Manually run a single task"""
-    if task_type not in TASK_FUNCTIONS:
-        register_all_tasks()
-    
-    if task_type not in TASK_FUNCTIONS:
-        return {'success': False, 'duration': 0, 'error': 'Task not registered'}
-    
-    return execute_task(task_type)
+# Global flag for graceful shutdown
+running = True
 
 
-# ============================================
-# Main
-# ============================================
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    global running
+    logger.info("\n⚠️  Shutdown signal received, finishing current cycle...")
+    running = False
 
-if __name__ == "__main__":
-    # Setup logging for production
-    log_dir = 'logs'
-    os.makedirs(log_dir, exist_ok=True)
+
+def main():
+    """Main entry point"""
+    global running
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(f'{log_dir}/worker.log', encoding='utf-8')
-        ]
-    )
-    
-    logger.info("=" * 70)
-    logger.info("Multi-Threaded Task Scheduler")
-    logger.info("=" * 70)
+    logger.info("═"*70)
+    logger.info("🚀 Sequential Task Scheduler Starting")
+    logger.info("═"*70)
     logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
-    logger.info("=" * 70)
     
-    # Graceful shutdown handler
-    def signal_handler(signum, frame):
-        logger.info("Received shutdown signal, stopping scheduler...")
-        stop_scheduler()
-        sys.exit(0)
+    # Check FFmpeg availability
+    try:
+        from app.utils.audio_converter import AudioConverter
+        audio_converter = AudioConverter()
+        
+        if audio_converter.is_ffmpeg_available():
+            logger.info("✅ FFmpeg available")
+        else:
+            logger.warning("⚠️  FFmpeg not available - audio features may be limited")
+    except Exception as e:
+        logger.warning(f"⚠️  Could not check FFmpeg availability: {e}")
     
+    logger.info(f"Base cycle interval: {BASE_CYCLE_INTERVAL}s ({BASE_CYCLE_INTERVAL//60} min)")
+    logger.info("")
+    logger.info("Schedule:")
+    logger.info(f"  📥 Scraping:    every {CYCLE_CONFIG['scraping']} cycle(s)")
+    logger.info(f"  🔄 Processing:  every {CYCLE_CONFIG['processing']} cycle(s)")
+    logger.info(f"  🎨 Media:       every {CYCLE_CONFIG['media_generation']} cycle(s)")
+    logger.info(f"  📤 Publishing:  every {CYCLE_CONFIG['publishing']} cycle(s)")
+    logger.info(f"  📻 Broadcast:   every {CYCLE_CONFIG['broadcast']} cycle(s)")
+    logger.info("═"*70)
+    
+    # Setup signal handlers
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
+    # Import jobs
     try:
-        start_scheduler()
-        
-        # Keep main thread alive
-        logger.info("Scheduler is running. Press Ctrl+C to stop.")
-        while scheduler_running:
-            time.sleep(1)
-            
-            # Check if any task thread has unexpectedly stopped
-            with scheduler_lock:
-                dead_threads = []
-                for task_type, thread in task_threads.items():
-                    stop_flag = task_stop_flags.get(task_type, threading.Event())
-                    if not thread.is_alive() and not stop_flag.is_set():
-                        dead_threads.append(task_type)
-            
-            if dead_threads:
-                logger.warning(f"Dead threads detected: {dead_threads}")
-                # Could implement auto-restart here if needed
-            
-    except KeyboardInterrupt:
-        logger.info("\nKeyboard interrupt received")
-        stop_scheduler()
+        import_jobs()
     except Exception as e:
-        logger.error(f"Scheduler crashed: {e}")
+        logger.error(f"❌ Failed to import jobs: {e}")
         traceback.print_exc()
-        stop_scheduler()
         sys.exit(1)
+    
+    cycle_number = 0
+    
+    while running:
+        cycle_number += 1
+        
+        try:
+            # Run the cycle
+            run_cycle(cycle_number)
+            
+            if not running:
+                break
+            
+            # Wait for next cycle
+            logger.info(f"💤 Waiting {BASE_CYCLE_INTERVAL}s ({BASE_CYCLE_INTERVAL//60} min) until next cycle...")
+            
+            # Sleep in small increments to allow for graceful shutdown
+            for _ in range(BASE_CYCLE_INTERVAL):
+                if not running:
+                    break
+                time.sleep(1)
+                
+        except KeyboardInterrupt:
+            logger.info("\n⚠️  Keyboard interrupt received")
+            break
+            
+        except Exception as e:
+            logger.error(f"❌ Cycle error: {e}")
+            traceback.print_exc()
+            
+            # Wait a bit before retrying
+            logger.info("⏳ Waiting 60s before retry...")
+            for _ in range(60):
+                if not running:
+                    break
+                time.sleep(1)
+    
+    logger.info("\n" + "═"*70)
+    logger.info("🛑 Scheduler stopped gracefully")
+    logger.info("═"*70)
+
+
+if __name__ == "__main__":
+    main()

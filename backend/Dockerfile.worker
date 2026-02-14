@@ -1,32 +1,37 @@
-# 🐳 Docker for Background Worker (start_worker.py)
-# Optimized for Render deployment with Playwright support
+# 🎯 Docker for Full Pipeline Worker
+# Complete automation pipeline with Arabic Support
 
-FROM python:3.11-slim
+FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
 
-# Install system dependencies for Playwright
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    ca-certificates \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libatspi2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libwayland-client0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libxrandr2 \
-    xvfb \
-    && rm -rf /var/lib/apt/lists/*
+# Set non-interactive mode for apt
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Update package lists and install ca-certificates first
+RUN apt-get clean && \
+    apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get update --fix-missing
+
+# Install basic system dependencies with retry logic
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        libpq-dev \
+        fontconfig \
+        ffmpeg \
+        ca-certificates \
+        curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Try to install Arabic fonts (optional) with retry logic
+RUN apt-get update --fix-missing && \
+    (apt-get install -y --no-install-recommends fonts-noto fonts-noto-arabic || echo "Arabic fonts not available") && \
+    fc-cache -fv && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -35,35 +40,48 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers with retry mechanism
-RUN python -m playwright install chromium || \
-    (sleep 10 && python -m playwright install chromium) || \
-    (sleep 20 && python -m playwright install chromium)
-
-# Install Playwright system dependencies with retry
-RUN python -m playwright install-deps chromium || \
-    (sleep 10 && python -m playwright install-deps chromium) || \
-    (sleep 20 && python -m playwright install-deps chromium)
+# Install Playwright browsers (chromium for scraping)
+RUN python -m playwright install chromium
 
 # Copy the entire backend code
 COPY . .
 
-# Set environment variables
+# Copy Arabic fonts to ensure availability
+COPY fonts/ ./fonts/
+
+# Verify font installation
+RUN echo "📝 Checking installed fonts..." && \
+    fc-list | grep -i noto | head -5 && \
+    echo "✅ Font installation complete"
+
+# Set environment variables for full pipeline worker
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV FONTCONFIG_PATH=/etc/fonts
+ENV FC_LANG=ar
 
-# Create logs directory
-RUN mkdir -p /app/app/logs
+# Worker specific settings
+ENV WORKER_TYPE=full
+ENV CYCLE_INTERVAL=120
+ENV REEL_BATCH_SIZE=4
+ENV IMAGE_BATCH_SIZE=4
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/app/logs && \
+    mkdir -p /app/fonts && \
+    mkdir -p /app/temp && \
+    chmod -R 755 /app
 
 # Expose port (not really needed for worker, but good practice)
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import psycopg2; from settings import DB_CONFIG; psycopg2.connect(**DB_CONFIG).close()" || exit 1
+# Health check for full pipeline worker
+HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
+    CMD python -c "import arabic_reshaper, bidi; from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; print('✅ Full pipeline worker healthy')" || exit 1
 
-# Run the worker
-CMD ["python", "start_worker.py"]
+# Run the improved worker with full pipeline
+CMD ["python", "start_worker_improved.py"]

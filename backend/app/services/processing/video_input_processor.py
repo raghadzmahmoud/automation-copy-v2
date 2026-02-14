@@ -11,7 +11,7 @@ from typing import Dict, Optional
 from fastapi import UploadFile
 from moviepy.editor import VideoFileClip
 from io import BytesIO
-from app.services.processing.audio_input_processor import AudioInputProcessor
+from app.services.processing.audio_input_processor_v2 import AudioInputProcessorV2
 
 class VideoInputProcessor:
     def __init__(self):
@@ -19,11 +19,92 @@ class VideoInputProcessor:
         print("🎥 Initializing Enhanced Video Input Processor")
         print("=" * 60)
         try:
-            self.audio_processor = AudioInputProcessor()
-            print("✅ AudioInputProcessor ready")
+            self.audio_processor = AudioInputProcessorV2()
+            print("✅ AudioInputProcessor V2 ready")
         except Exception as e:
             print(f"❌ Initialization failed: {e}")
             raise
+
+    def process_video_async(self, file: UploadFile, user_id: Optional[int] = None, source_type_id: int = 8) -> Dict:
+        """
+        Async Pipeline: Video → Extract Audio → Upload to S3 → Return 200 → Background Processing
+        
+        Returns immediately after saving video to S3.
+        Background job handles: STT → Refiner → Classifier → raw_news
+        """
+        print(f"\n{'='*70}")
+        print(f"🎥 Processing Video (ASYNC): {file.filename}")
+        print(f"{'='*70}")
+
+        try:
+            # --- 1. تحضير البيانات مسبقاً قبل الرفع ---
+            original_filename = file.filename
+            mime_type = file.content_type or 'video/mp4'
+            
+            file.file.seek(0)
+            video_bytes = file.file.read()
+            video_size = len(video_bytes)
+            
+            file.file = BytesIO(video_bytes)
+
+            # --- 2. رفع الفيديو الأصلي لـ S3 ---
+            print("\n📤 Step 1: Uploading Original Video to S3...")
+            video_upload_result = self.audio_processor._upload_to_s3(
+                file,
+                file_type="video"
+            )
+                        
+            if not video_upload_result['success']:
+                return {'success': False, 'error': f"فشل رفع الفيديو: {video_upload_result.get('error')}"}
+            
+            video_url = video_upload_result['url']
+            video_s3_key = video_upload_result['s3_key']
+
+            # --- 3. حفظ بيانات الفيديو في الداتابيز ---
+            print("💾 Step 2: Saving Video Metadata...")
+            video_file_id = self.audio_processor._save_uploaded_file_metadata(
+                original_filename=original_filename,
+                stored_filename=video_s3_key.split('/')[-1],
+                file_path=video_url,
+                file_size=video_size,
+                file_type='video',
+                mime_type=mime_type
+            )
+
+            # --- 4. استخراج الصوت من الفيديو ---
+            print("\n🎵 Step 3: Extracting audio...")
+            temp_upload_file = UploadFile(filename=original_filename, file=BytesIO(video_bytes))
+            audio_upload_file = self._extract_audio_from_video(temp_upload_file)
+            
+            if not audio_upload_file:
+                return {'success': False, 'error': 'فشل استخراج الصوت من الفيديو'}
+
+            # --- 5. رفع الصوت لـ S3 ---
+            print("📤 Step 4: Uploading extracted audio to S3...")
+            audio_tmp_upload = self.audio_processor._upload_to_s3(audio_upload_file)
+            audio_url = audio_tmp_upload['url']
+
+            # --- 6. جدولة processing ---
+            print("\n⏳ Step 5: Scheduling background processing...")
+            self.audio_processor._schedule_background_processing(video_file_id, audio_url, source_type_id)
+
+            print(f"\n✅ SUCCESS! Processing scheduled (ID: {video_file_id})")
+            print("   The video will be processed in the background.")
+            print("   Check /api/media/input/video/status/{id} for progress.")
+
+            return {
+                'success': True,
+                'news_id': None,
+                'video_url': video_url,
+                'title': None,
+                'transcription': None,
+                'uploaded_file_id': video_file_id,
+                'message': 'Processing scheduled. Check status endpoint for updates.'
+            }
+
+        except Exception as e:
+            print(f"❌ Critical Error in Video Processing: {e}")
+            return {'success': False, 'error': str(e)}
 
     def process_video(self, file: UploadFile, user_id: Optional[int] = None, source_type_id: int = 8) -> Dict:
         print(f"\n{'='*70}")
@@ -61,8 +142,7 @@ class VideoInputProcessor:
             video_file_id = self.audio_processor._save_uploaded_file_metadata(
                 original_filename=original_filename,
                 stored_filename=video_s3_key.split('/')[-1],
-                file_path=video_s3_key,
-                file_size=video_size,
+                file_path=video_url,                file_size=video_size,
                 file_type='video',
                 mime_type=mime_type
             )

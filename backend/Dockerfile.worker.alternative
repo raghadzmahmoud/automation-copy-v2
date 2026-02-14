@@ -1,0 +1,115 @@
+# 🎯 Alternative Docker for Full Pipeline Worker
+# Complete automation pipeline with Arabic Support - Using Ubuntu 22.04
+
+FROM ubuntu:22.04
+
+# Set non-interactive mode for apt
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Update package lists and install essential packages
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        gnupg \
+        software-properties-common && \
+    apt-get update --fix-missing
+
+# Install Python 3.11
+RUN add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.11 \
+        python3.11-pip \
+        python3.11-dev \
+        python3.11-venv && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# Install system dependencies
+RUN apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        libpq-dev \
+        fontconfig \
+        ffmpeg \
+        libnss3 \
+        libnspr4 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libxkbcommon0 \
+        libatspi2.0-0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxrandr2 \
+        libgbm1 \
+        libxss1 \
+        libasound2 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Try to install Arabic fonts (optional)
+RUN apt-get update --fix-missing && \
+    (apt-get install -y --no-install-recommends fonts-noto fonts-noto-arabic || echo "Arabic fonts not available") && \
+    fc-cache -fv && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first (for better caching)
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright and browsers
+RUN python3 -m playwright install-deps
+RUN python3 -m playwright install chromium
+
+# Copy the entire backend code
+COPY . .
+
+# Copy Arabic fonts to ensure availability
+COPY fonts/ ./fonts/
+
+# Verify font installation
+RUN echo "📝 Checking installed fonts..." && \
+    fc-list | grep -i noto | head -5 && \
+    echo "✅ Font installation complete"
+
+# Set environment variables for full pipeline worker
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV FONTCONFIG_PATH=/etc/fonts
+ENV FC_LANG=ar
+
+# Worker specific settings
+ENV WORKER_TYPE=full
+ENV CYCLE_INTERVAL=120
+ENV REEL_BATCH_SIZE=4
+ENV IMAGE_BATCH_SIZE=4
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/app/logs && \
+    mkdir -p /app/fonts && \
+    mkdir -p /app/temp && \
+    chmod -R 755 /app
+
+# Expose port (not really needed for worker, but good practice)
+EXPOSE 8000
+
+# Health check for full pipeline worker
+HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=3 \
+    CMD python -c "import arabic_reshaper, bidi; from app.services.generators.social_media_image_generator import SocialImageGenerator; from app.services.generators.reel_generator import ReelGenerator; print('✅ Full pipeline worker healthy')" || exit 1
+
+# Run the improved worker with full pipeline
+CMD ["python", "start_worker_improved.py"]

@@ -2,6 +2,7 @@
 """
 🎬 Reel Generation Cron Job
 Runs every hour to generate Instagram Reels for reports with images and audio
+Limited to 4 reports per run
 Usage: python cron/reel_generation_job.py
 """
 import sys
@@ -106,12 +107,15 @@ def generate_reels(report_id: int = None, force_update: bool = False):
                 logger.error(f"❌ Failed: {result.error_message}")
                 log_task_execution('failed', 0, result.error_message)
         else:
+            # Get batch size from environment variable
+            batch_size = int(os.getenv('MAX_REELS_PER_RUN', 1))
+            
             # Generate reels for all reports (original behavior)
-            logger.info(f"Processing limit: 10 reports per run")
+            logger.info(f"Processing limit: {batch_size} reports per run")
             
             stats = generator.generate_for_all_reports(
                 force_update=force_update,
-                limit=10
+                limit=batch_size
             )
             
             # Log completion

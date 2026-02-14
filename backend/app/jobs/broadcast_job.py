@@ -12,11 +12,15 @@ Job موحد للنشرات والموجزات
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional
+import psycopg2
+from croniter import croniter
+
+from settings import DB_CONFIG
 
 # Logging setup
 log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
@@ -36,6 +40,46 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # BROADCAST GENERATION
 # =============================================================================
+
+def update_next_run_at(task_type: str, cron_pattern: str) -> bool:
+    """
+    تحديث next_run_at بعد التوليد الناجح
+    
+    Args:
+        task_type: نوع المهمة (broadcast_generation, bulletin_generation, digest_generation)
+        cron_pattern: نمط الـ cron من broadcast_configs
+    
+    Returns:
+        bool: نجاح أم لا
+    """
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # حساب next_run_at حسب cron pattern
+        now = datetime.now()
+        cron = croniter(cron_pattern, now)
+        next_run = cron.get_next(datetime)
+        
+        # تحديث المهمة
+        cursor.execute("""
+            UPDATE scheduled_tasks
+            SET next_run_at = %s,
+                last_status = 'ready'
+            WHERE task_type = %s
+        """, (next_run, task_type))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"📅 Updated {task_type}: next_run_at = {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating next_run_at for {task_type}: {e}")
+        return False
+
 
 def generate_broadcast(config_code: str = None) -> Dict:
     """
@@ -78,6 +122,14 @@ def generate_broadcast(config_code: str = None) -> Dict:
                 if result.success and not result.skipped:
                     _generate_audio_for_broadcast(result)
         
+        # تحديث next_run_at بعد التوليد الناجح
+        if results and any(r.success and not r.skipped for r in results.values()):
+            cron_pattern = _get_cron_pattern(generator)
+            if cron_pattern:
+                update_next_run_at('broadcast_generation', cron_pattern)
+                update_next_run_at('bulletin_generation', cron_pattern)
+                update_next_run_at('digest_generation', cron_pattern)
+        
         duration = (datetime.now() - start_time).total_seconds()
         
         # إحصائيات
@@ -119,6 +171,30 @@ def generate_broadcast(config_code: str = None) -> Dict:
                 generator.close()
             except:
                 pass
+
+
+def _get_cron_pattern(generator: 'BroadcastGenerator') -> Optional[str]:
+    """
+    جلب cron pattern من broadcast_configs
+    
+    Args:
+        generator: BroadcastGenerator instance
+    
+    Returns:
+        str: cron pattern أو None
+    """
+    try:
+        generator.cursor.execute("""
+            SELECT schedule_pattern FROM scheduled_tasks 
+            WHERE task_type = 'broadcast_generation' 
+            AND status = 'active'
+            LIMIT 1
+        """)
+        row = generator.cursor.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        logger.warning(f"⚠️ Error getting cron pattern: {e}")
+        return None
 
 
 def _generate_audio_for_broadcast(result) -> bool:

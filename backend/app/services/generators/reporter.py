@@ -30,12 +30,12 @@ class ReportData:
     title: str
     content: str
     
-    def is_valid(self, min_words: int = 50, max_words: int = 300) -> Tuple[bool, str]:
+    def is_valid(self, min_words: int = 25, max_words: int = 300) -> Tuple[bool, str]:
         """التحقق من صحة البيانات"""
         if not self.title or len(self.title.strip()) < 10:
             return False, "العنوان قصير جداً"
         
-        if not self.content or len(self.content.strip()) < 100:
+        if not self.content or len(self.content.strip()) < 30:
             return False, "المحتوى قصير جداً"
         
         word_count = len(self.content.split())
@@ -376,7 +376,7 @@ class ReportGenerator:
 
         return prompt
 
-    def _call_gemini(self, prompt: str, min_words: int = 50, max_words: int = 300, retries: int = 3) -> Optional[ReportData]:
+    def _call_gemini(self, prompt: str, min_words: int = 30, max_words: int = 300, retries: int = 3) -> Optional[ReportData]:
         """استدعاء Gemini واستخراج البيانات"""
         for attempt in range(retries):
             try:
