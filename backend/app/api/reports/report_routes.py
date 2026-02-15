@@ -530,18 +530,24 @@ def get_report_with_content(report_id: int, content_type_id: int):
 async def get_reports_with_complete_content(
     page: int = Query(1, ge=1, description="رقم الصفحة"),
     limit: int = Query(20, ge=1, le=100, description="عدد Reports في الصفحة"),
-    sort: str = Query("desc", regex="^(asc|desc)$", description="الترتيب: asc أو desc")
+    sort: str = Query("desc", regex="^(asc|desc)$", description="الترتيب: asc أو desc"),
+    content_filter: Optional[str] = Query(None, description="تصفية حسب نوع المحتوى: all, has_image, has_audio, has_social, complete")
 ):
     """
-    🎯 Get all reports with their available content:
+    🎯 Get all reports with their available content (OPTIMIZED VERSION):
     - Report (required - التقرير النصي)
     - Image: generated first, fallback to raw_news.content_img
     - Audio: if exists in generated_content
     - Social Media: if exists in generated_content
 
-    Returns all reports with whatever content is available
+    ✅ OPTIMIZATION: Single query instead of N+1 queries
+    ✅ FASTER: Reduced database round trips
+    ✅ FILTERS: Optional content filtering
 
-    Example: GET /api/reports/with-complete-content?page=1&limit=20&sort=desc
+    Example: 
+    - GET /api/reports/with-complete-content?page=1&limit=20&sort=desc
+    - GET /api/reports/with-complete-content?content_filter=has_image
+    - GET /api/reports/with-complete-content?content_filter=complete
     """
     try:
         conn = get_db()
@@ -552,169 +558,317 @@ async def get_reports_with_complete_content(
         sort_direction = "DESC" if sort == "desc" else "ASC"
 
         # ========================================
-        # QUERY 1: Get all reports
+        # OPTIMIZED SINGLE QUERY
         # ========================================
-
-        query_reports = f"""
+        
+        # Base query with conditional aggregation
+        base_query = """
         SELECT
-            gr.id,
+            gr.id AS report_id,
             gr.cluster_id,
-            gr.title,
-            gr.content,
-            gr.status,
+            gr.title AS report_title,
+            gr.content AS report_content,
+            gr.status AS report_status,
             gr.source_news_count,
-            gr.created_at,
-            gr.updated_at,
-            gr.published_at,
-            nc.category_id,
-            c.name as category_name,
-            nc.description as cluster_description,
-            nc.tags as cluster_tags
-
+            gr.created_at AS report_created_at,
+            gr.updated_at AS report_updated_at,
+            gr.published_at AS report_published_at,
+            c.name AS category_name,
+            nc.description AS cluster_description,
+            nc.tags AS cluster_tags,
+            -- Generated content aggregation
+            MAX(CASE WHEN gc.content_type_id = 6 THEN gc.file_url END) AS generated_image_url,
+            MAX(CASE WHEN gc.content_type_id = 6 THEN gc.title END) AS generated_image_title,
+            MAX(CASE WHEN gc.content_type_id = 6 THEN gc.description END) AS generated_image_desc,
+            MAX(CASE WHEN gc.content_type_id = 6 THEN gc.id END) AS generated_image_id,
+            MAX(CASE WHEN gc.content_type_id = 7 THEN gc.file_url END) AS generated_audio_url,
+            MAX(CASE WHEN gc.content_type_id = 7 THEN gc.title END) AS generated_audio_title,
+            MAX(CASE WHEN gc.content_type_id = 7 THEN gc.description END) AS generated_audio_desc,
+            MAX(CASE WHEN gc.content_type_id = 7 THEN gc.id END) AS generated_audio_id,
+            -- Original image from raw_news
+            (
+                SELECT rn.content_img
+                FROM news_cluster_members ncm
+                JOIN raw_news rn ON ncm.news_id = rn.id
+                WHERE ncm.cluster_id = gr.cluster_id
+                AND rn.content_img IS NOT NULL
+                AND rn.content_img != ''
+                AND rn.content_img != 'null'
+                LIMIT 1
+            ) AS original_image_url,
+            -- Social media count
+            (
+                SELECT COUNT(*)
+                FROM generated_content gc2
+                WHERE gc2.report_id = gr.id
+                AND gc2.content_type_id = 1
+            ) AS social_media_count,
+            -- Social media details (first 3 items)
+            (
+                SELECT json_agg(
+                    json_build_object(
+                        'id', gc3.id,
+                        'title', gc3.title,
+                        'description', gc3.description,
+                        'content', gc3.content,
+                        'file_url', gc3.file_url,
+                        'status', gc3.status,
+                        'created_at', gc3.created_at,
+                        'updated_at', gc3.updated_at,
+                        'source', 'generated'
+                    )
+                )
+                FROM (
+                    SELECT id, title, description, content, file_url, status, created_at, updated_at
+                    FROM generated_content
+                    WHERE report_id = gr.id AND content_type_id = 1
+                    ORDER BY created_at DESC
+                    LIMIT 3
+                ) gc3
+            ) AS social_media_items
         FROM generated_report gr
         LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
         LEFT JOIN categories c ON nc.category_id = c.id
+        LEFT JOIN generated_content gc ON gr.id = gc.report_id
+            AND gc.content_type_id IN (6, 7)  -- صور وصوت فقط للـ aggregation
+        """
+        
+        # Add WHERE clause based on content filter
+        where_clause = ""
+        if content_filter:
+            if content_filter == "has_image":
+                where_clause = """
+                WHERE (
+                    EXISTS (
+                        SELECT 1 FROM generated_content 
+                        WHERE report_id = gr.id AND content_type_id = 6
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM news_cluster_members ncm
+                        JOIN raw_news rn ON ncm.news_id = rn.id
+                        WHERE ncm.cluster_id = gr.cluster_id
+                        AND rn.content_img IS NOT NULL
+                    )
+                )
+                """
+            elif content_filter == "has_audio":
+                where_clause = """
+                WHERE EXISTS (
+                    SELECT 1 FROM generated_content 
+                    WHERE report_id = gr.id AND content_type_id = 7
+                )
+                """
+            elif content_filter == "has_social":
+                where_clause = """
+                WHERE EXISTS (
+                    SELECT 1 FROM generated_content 
+                    WHERE report_id = gr.id AND content_type_id = 1
+                )
+                """
+            elif content_filter == "complete":
+                where_clause = """
+                WHERE (
+                    EXISTS (SELECT 1 FROM generated_content WHERE report_id = gr.id AND content_type_id = 6)
+                    OR EXISTS (
+                        SELECT 1 FROM news_cluster_members ncm
+                        JOIN raw_news rn ON ncm.news_id = rn.id
+                        WHERE ncm.cluster_id = gr.cluster_id
+                        AND rn.content_img IS NOT NULL
+                    )
+                )
+                AND EXISTS (SELECT 1 FROM generated_content WHERE report_id = gr.id AND content_type_id = 7)
+                AND EXISTS (SELECT 1 FROM generated_content WHERE report_id = gr.id AND content_type_id = 1)
+                """
+        
+        # Complete query with GROUP BY, ORDER BY, and LIMIT
+        query = f"""
+        {base_query}
+        {where_clause}
+        GROUP BY 
+            gr.id, gr.cluster_id, gr.title, gr.content, gr.status, 
+            gr.source_news_count, gr.created_at, gr.updated_at, gr.published_at,
+            c.name, nc.description, nc.tags
         ORDER BY gr.created_at {sort_direction}
         LIMIT %s OFFSET %s
         """
-
-        cursor.execute(query_reports, (limit, offset))
+        
+        cursor.execute(query, (limit, offset))
         reports_data = cursor.fetchall()
 
         # ========================================
-        # QUERY 2: Get total count
+        # Get total count (with filter if applicable)
         # ========================================
-
-        cursor.execute("SELECT COUNT(*) FROM generated_report")
+        count_query = "SELECT COUNT(*) FROM generated_report gr"
+        if content_filter:
+            if content_filter == "has_image":
+                count_query += """
+                WHERE (
+                    EXISTS (
+                        SELECT 1 FROM generated_content 
+                        WHERE report_id = gr.id AND content_type_id = 6
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM news_cluster_members ncm
+                        JOIN raw_news rn ON ncm.news_id = rn.id
+                        WHERE ncm.cluster_id = gr.cluster_id
+                        AND rn.content_img IS NOT NULL
+                    )
+                )
+                """
+            elif content_filter == "has_audio":
+                count_query += """
+                WHERE EXISTS (
+                    SELECT 1 FROM generated_content 
+                    WHERE report_id = gr.id AND content_type_id = 7
+                )
+                """
+            elif content_filter == "has_social":
+                count_query += """
+                WHERE EXISTS (
+                    SELECT 1 FROM generated_content 
+                    WHERE report_id = gr.id AND content_type_id = 1
+                )
+                """
+            elif content_filter == "complete":
+                count_query += """
+                WHERE (
+                    EXISTS (SELECT 1 FROM generated_content WHERE report_id = gr.id AND content_type_id = 6)
+                    OR EXISTS (
+                        SELECT 1 FROM news_cluster_members ncm
+                        JOIN raw_news rn ON ncm.news_id = rn.id
+                        WHERE ncm.cluster_id = gr.cluster_id
+                        AND rn.content_img IS NOT NULL
+                    )
+                )
+                AND EXISTS (SELECT 1 FROM generated_content WHERE report_id = gr.id AND content_type_id = 7)
+                AND EXISTS (SELECT 1 FROM generated_content WHERE report_id = gr.id AND content_type_id = 1)
+                """
+        
+        cursor.execute(count_query)
         total_count = cursor.fetchone()[0]
 
         # ========================================
-        # Build response with content
+        # Build response from single query result
         # ========================================
-
         reports = []
 
-        for report in reports_data:
-            report_id = report[0]
-            cluster_id = report[1]
-
-            # ========================================
-            # Get generated content
-            # ========================================
-            query_content = """
-            SELECT
-                gc.id,
-                gc.content_type_id,
-                gc.title,
-                gc.description,
-                gc.content,
-                gc.file_url,
-                gc.status,
-                gc.created_at,
-                gc.updated_at
-            FROM generated_content gc
-            WHERE gc.report_id = %s
-            ORDER BY gc.content_type_id
-            """
-
-            cursor.execute(query_content, (report_id,))
-            content_data = cursor.fetchall()
-
+        for row in reports_data:
+            report_id = row[0]
+            cluster_id = row[1]
+            
             # Organize content by type
             content_by_type = {
                 'image': None,
                 'audio': None,
                 'social_media': []
             }
-
-            has_generated_image = False
-
-            for item in content_data:
-                content_obj = {
-                    'id': item[0],
-                    'content_type_id': item[1],
-                    'title': item[2],
-                    'description': item[3],
-                    'content': item[4],
-                    'file_url': item[5],
-                    'status': item[6],
-                    'created_at': item[7].isoformat() if item[7] else None,
-                    'updated_at': item[8].isoformat() if item[8] else None,
+            
+            # حساب indices الأعمدة بشكل صحيح
+            # 0: report_id, 1: cluster_id, 2: report_title, 3: report_content, 4: report_status
+            # 5: source_news_count, 6: report_created_at, 7: report_updated_at, 8: report_published_at
+            # 9: category_name, 10: cluster_description, 11: cluster_tags
+            # 12: generated_image_url, 13: generated_image_title, 14: generated_image_desc, 15: generated_image_id
+            # 16: generated_audio_url, 17: generated_audio_title, 18: generated_audio_desc, 19: generated_audio_id
+            # 20: original_image_url, 21: social_media_count, 22: social_media_items
+            
+            # Image content (generated first, then original)
+            if row[12]:  # generated_image_url
+                content_by_type['image'] = {
+                    'id': row[15],  # generated_image_id
+                    'content_type_id': 6,
+                    'title': row[13] or 'Generated image',  # generated_image_title
+                    'description': row[14] or 'Generated image',  # generated_image_desc
+                    'content': None,
+                    'file_url': row[12],  # generated_image_url
+                    'status': 'generated',
+                    'created_at': None,
+                    'updated_at': None,
                     'source': 'generated'
                 }
-
-                if item[1] == 6:  # Image
-                    content_by_type['image'] = content_obj
-                    has_generated_image = True
-
-                elif item[1] == 7:  # Audio
-                    content_by_type['audio'] = content_obj
-
-                elif item[1] == 1:  # Social Media
-                    content_by_type['social_media'].append(content_obj)
-
-            # ========================================
-            # Fallback: Get image from raw_news if not generated
-            # ========================================
-            if not has_generated_image and cluster_id:
-                cursor.execute("""
-                    SELECT rn.content_img, rn.title
-                    FROM news_cluster_members ncm
-                    JOIN raw_news rn ON ncm.news_id = rn.id
-                    WHERE ncm.cluster_id = %s
-                    AND rn.content_img IS NOT NULL
-                    AND rn.content_img != ''
-                    AND rn.content_img != 'null'
-                    LIMIT 1
-                """, (cluster_id,))
-
-                original_image = cursor.fetchone()
-                if original_image:
-                    content_by_type['image'] = {
-                        'id': None,
-                        'content_type_id': 6,
-                        'title': original_image[1],
-                        'description': 'Original image from news source',
-                        'content': None,
-                        'file_url': original_image[0],
-                        'status': 'original',
-                        'created_at': None,
-                        'updated_at': None,
-                        'source': 'original'
-                    }
-
-            # ========================================
+            elif row[20]:  # original_image_url
+                content_by_type['image'] = {
+                    'id': None,
+                    'content_type_id': 6,
+                    'title': 'Original news image',
+                    'description': 'Original image from news source',
+                    'content': None,
+                    'file_url': row[20],  # original_image_url
+                    'status': 'original',
+                    'created_at': None,
+                    'updated_at': None,
+                    'source': 'original'
+                }
+            
+            # Audio content
+            if row[16]:  # generated_audio_url
+                content_by_type['audio'] = {
+                    'id': row[19],  # generated_audio_id
+                    'content_type_id': 7,
+                    'title': row[17] or 'Generated audio',  # generated_audio_title
+                    'description': row[18] or 'Generated audio',  # generated_audio_desc
+                    'content': None,
+                    'file_url': row[16],  # generated_audio_url
+                    'status': 'generated',
+                    'created_at': None,
+                    'updated_at': None,
+                    'source': 'generated'
+                }
+            
+            # Social media content
+            social_media_items = row[22]  # social_media_items (JSON array)
+            if social_media_items:
+                try:
+                    # التحقق إذا كان social_media_items هو string JSON
+                    import json
+                    if isinstance(social_media_items, str):
+                        social_media_items = json.loads(social_media_items)
+                    
+                    for item in social_media_items:
+                        content_by_type['social_media'].append({
+                            'id': item.get('id'),
+                            'content_type_id': 1,
+                            'title': item.get('title', ''),
+                            'description': item.get('description', ''),
+                            'content': item.get('content', ''),
+                            'file_url': item.get('file_url', ''),
+                            'status': item.get('status', ''),
+                            'created_at': item.get('created_at'),
+                            'updated_at': item.get('updated_at'),
+                            'source': 'generated'
+                        })
+                except Exception as e:
+                    # في حالة خطأ في معالجة JSON، نستخدم القيمة الفارغة
+                    print(f"Warning: Error processing social media items: {e}")
+            
             # Content summary
-            # ========================================
             content_summary = {
                 'has_image': content_by_type['image'] is not None,
                 'has_audio': content_by_type['audio'] is not None,
                 'has_social_media': len(content_by_type['social_media']) > 0,
                 'image_source': content_by_type['image']['source'] if content_by_type['image'] else None,
-                'social_media_count': len(content_by_type['social_media'])
+                'social_media_count': row[21] or 0  # social_media_count
             }
 
             # Build report object
             report_obj = {
-                'id': report[0],
-                'cluster_id': report[1],
-                'title': report[2],
-                'content': report[3],
-                'status': report[4],
-                'source_news_count': report[5],
-                'created_at': report[6].isoformat() if report[6] else None,
-                'updated_at': report[7].isoformat() if report[7] else None,
-                'published_at': report[8].isoformat() if report[8] else None,
+                'id': report_id,
+                'cluster_id': cluster_id,
+                'title': row[2],  # report_title
+                'content': row[3],  # report_content
+                'status': row[4],  # report_status
+                'source_news_count': row[5],
+                'created_at': row[6].isoformat() if row[6] else None,  # report_created_at
+                'updated_at': row[7].isoformat() if row[7] else None,  # report_updated_at
+                'published_at': row[8].isoformat() if row[8] else None,  # report_published_at
 
                 'category': {
-                    'id': report[9],
-                    'name': report[10]
-                } if report[9] else None,
+                    'name': row[9]  # category_name
+                } if row[9] else None,
 
                 'cluster': {
-                    'description': report[11],
-                    'tags': report[12]
-                } if report[11] else None,
+                    'description': row[10],  # cluster_description
+                    'tags': row[11]  # cluster_tags
+                } if row[10] else None,
 
                 'generated_content': content_by_type,
                 'content_summary': content_summary
@@ -731,7 +885,8 @@ async def get_reports_with_complete_content(
             'total': total_count,
             'pages': total_pages,
             'has_next': page < total_pages,
-            'has_prev': page > 1
+            'has_prev': page > 1,
+            'filter': content_filter
         }
 
         cursor.close()
@@ -740,7 +895,12 @@ async def get_reports_with_complete_content(
         return {
             'success': True,
             'pagination': pagination,
-            'reports': reports
+            'reports': reports,
+            'performance': {
+                'query_count': 2,  # فقط 2 كويري بدلاً من N+1
+                'optimized': True,
+                'message': 'Single optimized query with conditional aggregation'
+            }
         }
 
     except Exception as e:
