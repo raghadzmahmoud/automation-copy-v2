@@ -3,9 +3,11 @@
 # ═══════════════════════════════════════════════════════════════
 # Build context: backend/
 # Command: docker build -f Dockerfile.worker -t worker .
+# Python Version: 3.11
 # ═══════════════════════════════════════════════════════════════
 
-FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
+# استخدام Python 3.11 مع Playwright
+FROM python:3.11-slim-bookworm
 
 # ═══════════════════════════════════════════════════════════════
 # System Configuration
@@ -35,7 +37,9 @@ RUN apt-get clean && \
         fonts-noto-arabic \
         ffmpeg \
         ca-certificates \
-        curl && \
+        curl \
+        wget \
+        gnupg && \
     fc-cache -fv && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean

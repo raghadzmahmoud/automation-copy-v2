@@ -92,11 +92,11 @@ def generate_audio() -> dict:
         
         generator = AudioGenerator()
         
-        logger.info(f"⚙️ Limit: 4 audio files per run")
+        logger.info(f"⚙️ Limit: 10 audio files per run")
         
         stats = generator.generate_for_all_reports(
             force_update=False,
-            limit=4
+            limit=10  # زيادة من 4 إلى 10
         )
         
         duration = (datetime.now() - start_time).total_seconds()

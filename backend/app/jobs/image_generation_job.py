@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 MAX_FAILURE_ATTEMPTS = 3  # تخطي التقارير اللي فشلت أكثر من هذا العدد
-REPORTS_PER_RUN = 10      # عدد التقارير لكل تشغيل (مخفف من 40)
+REPORTS_PER_RUN = 20      # عدد التقارير لكل تشغيل (زيادة من 10 إلى 20)
 CHECK_HOURS = 48          # فحص التقارير من آخر X ساعة
 
 
@@ -50,26 +50,41 @@ CHECK_HOURS = 48          # فحص التقارير من آخر X ساعة
 def has_reports_without_images(hours: int = CHECK_HOURS) -> tuple:
     """
     ✅ Condition: هل في تقارير جديدة بدون صور؟
-    مع استثناء التقارير الفاشلة كتير
+    - يستثني التقارير اللي فشلت كتير
+    - يستثني التقارير اللي الـ raw_news تبعها فيها صورة
     """
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
         # ✅ Query محسن: يستثني التقارير اللي فشلت كتير
+        # ويستثني التقارير اللي الأخبار الأصلية فيها صور
         cursor.execute("""
             SELECT COUNT(*) FROM generated_report gr
             WHERE gr.created_at >= NOW() - INTERVAL '%s hours'
             AND gr.status = 'draft'
+            -- التقرير ما عنده صورة مولدة
             AND NOT EXISTS (
                 SELECT 1 FROM generated_content gc
                 WHERE gc.report_id = gr.id
                 AND gc.content_type_id = 6
             )
+            -- التقرير ما فشل كتير
             AND NOT EXISTS (
                 SELECT 1 FROM image_generation_failures igf
                 WHERE igf.report_id = gr.id
                 AND igf.attempt_count >= %s
+            )
+            -- الأخبار الأصلية ما فيها صور
+            AND NOT EXISTS (
+                SELECT 1 FROM news_cluster_members ncm
+                JOIN raw_news rn ON ncm.news_id = rn.id
+                WHERE ncm.cluster_id = gr.cluster_id
+                AND (
+                    rn.image_url IS NOT NULL 
+                    AND rn.image_url != ''
+                    AND rn.image_url != 'null'
+                )
             )
         """, (hours, MAX_FAILURE_ATTEMPTS))
         
@@ -90,7 +105,7 @@ def has_reports_without_images(hours: int = CHECK_HOURS) -> tuple:
 
 
 def has_reports_without_images_simple(hours: int = CHECK_HOURS) -> tuple:
-    """Fallback query بدون فلتر الفشل"""
+    """Fallback query بدون فلتر الفشل، لكن مع فلتر الصور الأصلية"""
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
@@ -99,10 +114,22 @@ def has_reports_without_images_simple(hours: int = CHECK_HOURS) -> tuple:
             SELECT COUNT(*) FROM generated_report gr
             WHERE gr.created_at >= NOW() - INTERVAL '%s hours'
             AND gr.status = 'draft'
+            -- التقرير ما عنده صورة مولدة
             AND NOT EXISTS (
                 SELECT 1 FROM generated_content gc
                 WHERE gc.report_id = gr.id
                 AND gc.content_type_id = 6
+            )
+            -- الأخبار الأصلية ما فيها صور
+            AND NOT EXISTS (
+                SELECT 1 FROM news_cluster_members ncm
+                JOIN raw_news rn ON ncm.news_id = rn.id
+                WHERE ncm.cluster_id = gr.cluster_id
+                AND (
+                    rn.image_url IS NOT NULL 
+                    AND rn.image_url != ''
+                    AND rn.image_url != 'null'
+                )
             )
         """, (hours,))
         

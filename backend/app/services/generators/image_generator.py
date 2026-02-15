@@ -650,7 +650,7 @@ No text, no faces, no watermarks
             return None
     
     def _fetch_reports_without_images(self, limit: int = 40) -> List[Dict]:
-        """✅ جلب التقارير بدون صور (مع استثناء الفاشلة كتير)"""
+        """✅ جلب التقارير بدون صور (مع استثناء الفاشلة كتير والتقارير اللي أخبارها فيها صور)"""
         try:
             query = """
                 SELECT 
@@ -661,17 +661,30 @@ No text, no faces, no watermarks
                     gr.created_at
                 FROM generated_report gr
                 WHERE gr.status = 'draft'
+                    -- التقرير ما عنده صورة مولدة
                     AND NOT EXISTS (
                         SELECT 1
                         FROM generated_content gc
                         WHERE gc.report_id = gr.id
                             AND gc.content_type_id = %s
                     )
+                    -- التقرير ما فشل كتير
                     AND NOT EXISTS (
                         SELECT 1
                         FROM image_generation_failures igf
                         WHERE igf.report_id = gr.id
                             AND igf.attempt_count >= %s
+                    )
+                    -- الأخبار الأصلية ما فيها صور
+                    AND NOT EXISTS (
+                        SELECT 1 FROM news_cluster_members ncm
+                        JOIN raw_news rn ON ncm.news_id = rn.id
+                        WHERE ncm.cluster_id = gr.cluster_id
+                        AND (
+                            rn.image_url IS NOT NULL 
+                            AND rn.image_url != ''
+                            AND rn.image_url != 'null'
+                        )
                     )
                 ORDER BY gr.created_at DESC
                 LIMIT %s
@@ -695,15 +708,27 @@ No text, no faces, no watermarks
             return self._fetch_reports_without_images_simple(limit)
     
     def _fetch_reports_without_images_simple(self, limit: int = 40) -> List[Dict]:
-        """جلب التقارير بدون صور (بدون فلتر الفشل)"""
+        """جلب التقارير بدون صور (بدون فلتر الفشل، لكن مع فلتر الصور الأصلية)"""
         try:
             query = """
                 SELECT gr.id, gr.title, gr.content, gr.updated_at, gr.created_at
                 FROM generated_report gr
                 WHERE gr.status = 'draft'
+                    -- التقرير ما عنده صورة مولدة
                     AND NOT EXISTS (
                         SELECT 1 FROM generated_content gc
                         WHERE gc.report_id = gr.id AND gc.content_type_id = %s
+                    )
+                    -- الأخبار الأصلية ما فيها صور
+                    AND NOT EXISTS (
+                        SELECT 1 FROM news_cluster_members ncm
+                        JOIN raw_news rn ON ncm.news_id = rn.id
+                        WHERE ncm.cluster_id = gr.cluster_id
+                        AND (
+                            rn.image_url IS NOT NULL 
+                            AND rn.image_url != ''
+                            AND rn.image_url != 'null'
+                        )
                     )
                 ORDER BY gr.created_at DESC
                 LIMIT %s
