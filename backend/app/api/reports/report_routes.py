@@ -533,39 +533,30 @@ async def get_reports_with_complete_content(
     sort: str = Query("desc", regex="^(asc|desc)$", description="الترتيب: asc أو desc")
 ):
     """
-    🎯 Get reports that have ALL 3 content types:
-    - Image (content_type_id = 6)
-    - Audio (content_type_id = 7)  
-    - Social Media (content_type_id = 1)
-    
-    Returns full report details + all generated content
-    
+    🎯 Get all reports with their available content:
+    - Report (required - التقرير النصي)
+    - Image: generated first, fallback to raw_news.image_url
+    - Audio: if exists in generated_content
+    - Social Media: if exists in generated_content
+
+    Returns all reports with whatever content is available
+
     Example: GET /api/reports/with-complete-content?page=1&limit=20&sort=desc
     """
     try:
         conn = get_db()
         cursor = conn.cursor()
-        
+
         # Pagination
         offset = (page - 1) * limit
         sort_direction = "DESC" if sort == "desc" else "ASC"
-        
+
         # ========================================
-        # QUERY 1: Get reports with all 3 types
+        # QUERY 1: Get all reports
         # ========================================
-        
+
         query_reports = f"""
-        WITH complete_reports AS (
-            SELECT 
-                gc.report_id,
-                COUNT(DISTINCT gc.content_type_id) as types_count
-            FROM generated_content gc
-            WHERE gc.content_type_id IN (1, 6, 7,9,8)
-            GROUP BY gc.report_id
-            HAVING COUNT(DISTINCT gc.content_type_id) = 3
-        )
-        
-        SELECT 
+        SELECT
             gr.id,
             gr.cluster_id,
             gr.title,
@@ -579,52 +570,39 @@ async def get_reports_with_complete_content(
             c.name as category_name,
             nc.description as cluster_description,
             nc.tags as cluster_tags
-            
+
         FROM generated_report gr
-        INNER JOIN complete_reports cr ON gr.id = cr.report_id
         LEFT JOIN news_clusters nc ON gr.cluster_id = nc.id
         LEFT JOIN categories c ON nc.category_id = c.id
         ORDER BY gr.created_at {sort_direction}
         LIMIT %s OFFSET %s
         """
-        
+
         cursor.execute(query_reports, (limit, offset))
         reports_data = cursor.fetchall()
-        
+
         # ========================================
         # QUERY 2: Get total count
         # ========================================
-        
-        query_count = """
-        WITH complete_reports AS (
-            SELECT 
-                gc.report_id,
-                COUNT(DISTINCT gc.content_type_id) as types_count
-            FROM generated_content gc
-            WHERE gc.content_type_id IN (1, 6, 7)
-            GROUP BY gc.report_id
-            HAVING COUNT(DISTINCT gc.content_type_id) = 3
-        )
-        SELECT COUNT(*) as total
-        FROM complete_reports cr
-        INNER JOIN generated_report gr ON cr.report_id = gr.id
-        """
-        
-        cursor.execute(query_count)
+
+        cursor.execute("SELECT COUNT(*) FROM generated_report")
         total_count = cursor.fetchone()[0]
-        
+
         # ========================================
         # Build response with content
         # ========================================
-        
+
         reports = []
-        
+
         for report in reports_data:
             report_id = report[0]
-            
-            # Get all content for this report
+            cluster_id = report[1]
+
+            # ========================================
+            # Get generated content
+            # ========================================
             query_content = """
-            SELECT 
+            SELECT
                 gc.id,
                 gc.content_type_id,
                 gc.title,
@@ -636,25 +614,21 @@ async def get_reports_with_complete_content(
                 gc.updated_at
             FROM generated_content gc
             WHERE gc.report_id = %s
-            AND gc.content_type_id IN (1, 6, 7)
             ORDER BY gc.content_type_id
             """
-            
+
             cursor.execute(query_content, (report_id,))
             content_data = cursor.fetchall()
-            
+
             # Organize content by type
             content_by_type = {
                 'image': None,
                 'audio': None,
                 'social_media': []
             }
-            
-            content_summary = {
-                'total_items': len(content_data),
-                'by_type': {}
-            }
-            
+
+            has_generated_image = False
+
             for item in content_data:
                 content_obj = {
                     'id': item[0],
@@ -665,22 +639,61 @@ async def get_reports_with_complete_content(
                     'file_url': item[5],
                     'status': item[6],
                     'created_at': item[7].isoformat() if item[7] else None,
-                    'updated_at': item[8].isoformat() if item[8] else None
+                    'updated_at': item[8].isoformat() if item[8] else None,
+                    'source': 'generated'
                 }
-                
+
                 if item[1] == 6:  # Image
                     content_by_type['image'] = content_obj
-                    content_summary['by_type']['image'] = 1
-                    
+                    has_generated_image = True
+
                 elif item[1] == 7:  # Audio
                     content_by_type['audio'] = content_obj
-                    content_summary['by_type']['audio'] = 1
-                    
+
                 elif item[1] == 1:  # Social Media
                     content_by_type['social_media'].append(content_obj)
-                    content_summary['by_type']['social_media'] = \
-                        content_summary['by_type'].get('social_media', 0) + 1
-            
+
+            # ========================================
+            # Fallback: Get image from raw_news if not generated
+            # ========================================
+            if not has_generated_image and cluster_id:
+                cursor.execute("""
+                    SELECT rn.image_url, rn.title
+                    FROM news_cluster_members ncm
+                    JOIN raw_news rn ON ncm.news_id = rn.id
+                    WHERE ncm.cluster_id = %s
+                    AND rn.image_url IS NOT NULL
+                    AND rn.image_url != ''
+                    AND rn.image_url != 'null'
+                    LIMIT 1
+                """, (cluster_id,))
+
+                original_image = cursor.fetchone()
+                if original_image:
+                    content_by_type['image'] = {
+                        'id': None,
+                        'content_type_id': 6,
+                        'title': original_image[1],
+                        'description': 'Original image from news source',
+                        'content': None,
+                        'file_url': original_image[0],
+                        'status': 'original',
+                        'created_at': None,
+                        'updated_at': None,
+                        'source': 'original'
+                    }
+
+            # ========================================
+            # Content summary
+            # ========================================
+            content_summary = {
+                'has_image': content_by_type['image'] is not None,
+                'has_audio': content_by_type['audio'] is not None,
+                'has_social_media': len(content_by_type['social_media']) > 0,
+                'image_source': content_by_type['image']['source'] if content_by_type['image'] else None,
+                'social_media_count': len(content_by_type['social_media'])
+            }
+
             # Build report object
             report_obj = {
                 'id': report[0],
@@ -692,26 +705,26 @@ async def get_reports_with_complete_content(
                 'created_at': report[6].isoformat() if report[6] else None,
                 'updated_at': report[7].isoformat() if report[7] else None,
                 'published_at': report[8].isoformat() if report[8] else None,
-                
+
                 'category': {
                     'id': report[9],
                     'name': report[10]
                 } if report[9] else None,
-                
+
                 'cluster': {
                     'description': report[11],
                     'tags': report[12]
                 } if report[11] else None,
-                
+
                 'generated_content': content_by_type,
                 'content_summary': content_summary
             }
-            
+
             reports.append(report_obj)
-        
+
         # Pagination info
         total_pages = (total_count + limit - 1) // limit
-        
+
         pagination = {
             'page': page,
             'limit': limit,
@@ -720,18 +733,20 @@ async def get_reports_with_complete_content(
             'has_next': page < total_pages,
             'has_prev': page > 1
         }
-        
+
         cursor.close()
         conn.close()
-        
+
         return {
             'success': True,
             'pagination': pagination,
             'reports': reports
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 @router.get("/stats/overview")
