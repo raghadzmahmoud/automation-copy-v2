@@ -507,15 +507,20 @@ class SocialMediaGenerator:
     
     def _generate_all_platforms(self, report: Dict) -> Optional[Dict[str, SocialMediaContent]]:
         """✅ توليد محتوى لـ 3 منصات من برومبت واحد"""
-        prompt = self._create_multi_platform_prompt(report)
         
         for attempt in range(3):
             try:
+                # ✅ تغيير الـ prompt في كل محاولة
+                prompt = self._create_multi_platform_prompt(report, attempt=attempt)
+                
+                # ✅ زيادة temperature تدريجياً
+                temp = 0.5 + (attempt * 0.1)  # 0.5, 0.6, 0.7
+                
                 response = self.client.models.generate_content(
                     model=GEMINI_MODEL,
                     contents=prompt,
                     config={
-                        'temperature': 0.3,  # ✅ أقل للاتساق
+                        'temperature': temp,
                         'max_output_tokens': 2500
                     }
                 )
@@ -523,11 +528,10 @@ class SocialMediaGenerator:
                 result_text = response.text.strip()
                 
                 # ✅ Debug: طباعة جزء من الرد
-                if attempt == 0:
-                    print(f"   📝 Response preview: {result_text[:150]}...")
+                print(f"   📝 Response preview (attempt {attempt + 1}, temp={temp:.1f}): {result_text[:150]}...")
                 
                 # استخراج المحتوى
-                all_content = self.parser.parse_multi_platform(result_text, debug=(attempt == 2))
+                all_content = self.parser.parse_multi_platform(result_text, debug=(attempt >= 1))
                 
                 if not all_content or len(all_content) < 2:
                     print(f"   ⚠️  Could not parse ({len(all_content) if all_content else 0} platforms), attempt {attempt + 1}/3")
@@ -545,6 +549,7 @@ class SocialMediaGenerator:
                 
                 # ✅ 2 منصات صالحة كافية
                 if len(valid_content) >= 2:
+                    print(f"   ✅ Successfully generated {len(valid_content)} platforms")
                     return valid_content
                 
                 print(f"   ⚠️  Only {len(valid_content)} valid platforms, attempt {attempt + 1}/3")
@@ -554,11 +559,118 @@ class SocialMediaGenerator:
                 print(f"   ⚠️  Error: {str(e)[:100]}")
                 time.sleep(2)
         
-        print(f"   ❌ Failed after 3 attempts")
+        print(f"   ❌ Failed after 3 attempts - trying fallback strategy")
+        
+        # ✅ Fallback: توليد كل منصة لوحدها
+        return self._generate_platforms_individually(report)
+    
+    def _generate_platforms_individually(self, report: Dict) -> Optional[Dict[str, SocialMediaContent]]:
+        """✅ Fallback: توليد كل منصة لوحدها"""
+        print(f"   🔄 Trying individual platform generation...")
+        
+        all_content = {}
+        platforms = ['facebook', 'twitter', 'instagram']
+        
+        for platform in platforms:
+            content = self._generate_single_platform(report, platform)
+            if content:
+                is_valid, reason = content.is_valid()
+                if is_valid:
+                    all_content[platform] = content
+                    print(f"   ✅ Generated {platform}")
+                else:
+                    print(f"   ⚠️  {platform}: {reason}")
+            else:
+                print(f"   ❌ Failed to generate {platform}")
+            
+            time.sleep(1)  # تجنب rate limiting
+        
+        if len(all_content) >= 2:
+            print(f"   ✅ Fallback successful: {len(all_content)} platforms")
+            return all_content
+        
+        print(f"   ❌ Fallback failed: only {len(all_content)} platforms")
         return None
     
-    def _create_multi_platform_prompt(self, report: Dict) -> str:
-        """✅ برومبت محسّن وأوضح"""
+    def _generate_single_platform(self, report: Dict, platform: str) -> Optional[SocialMediaContent]:
+        """✅ توليد محتوى لمنصة واحدة فقط"""
+        
+        # تحديد المتطلبات حسب المنصة
+        if platform == 'facebook':
+            length = "400-700 حرف"
+            style = "جذاب ومفصل"
+            hashtags = "3 هاشتاقات"
+        elif platform == 'twitter':
+            length = "200-350 حرف"
+            style = "مختصر ومباشر"
+            hashtags = "2 هاشتاقات"
+        else:  # instagram
+            length = "400-600 حرف"
+            style = "بصري وملهم"
+            hashtags = "5 هاشتاقات"
+        
+        prompt = f"""أنت كاتب محتوى محترف لـ {platform.upper()}.
+
+📰 التقرير:
+العنوان: {report['title']}
+المحتوى: {report['content'][:1200]}
+
+اكتب منشور {platform.upper()} بالشكل التالي:
+
+العنوان: (عنوان جذاب من 5-12 كلمة)
+المحتوى: (منشور {length}، أسلوب {style}، {hashtags})
+
+قواعد:
+✅ استخدم 2-3 emojis مناسبة
+✅ الهاشتاقات: ضع _ بين الكلمات (مثال: #فلسطين_الحرة)
+✅ اكتب بأسلوب {style}
+"""
+        
+        try:
+            response = self.client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={
+                    'temperature': 0.6,
+                    'max_output_tokens': 1000
+                }
+            )
+            
+            result_text = response.text.strip()
+            
+            # استخراج العنوان والمحتوى
+            title_match = re.search(r'العنوان[:\s]+(.+?)(?=المحتوى|النص|$)', result_text, re.DOTALL | re.IGNORECASE)
+            content_match = re.search(r'(?:المحتوى|النص)[:\s]+(.+?)$', result_text, re.DOTALL | re.IGNORECASE)
+            
+            if title_match and content_match:
+                title = title_match.group(1).strip()
+                content = content_match.group(1).strip()
+                
+                # تنظيف
+                title = re.sub(r'\*\*|\n', ' ', title).strip()
+                content = re.sub(r'\*\*', '', content).strip()
+                
+                return SocialMediaContent(
+                    platform=platform,
+                    title=title,
+                    content=content
+                )
+        
+        except Exception as e:
+            print(f"   ⚠️  Error generating {platform}: {str(e)[:100]}")
+        
+        return None
+    
+    def _create_multi_platform_prompt(self, report: Dict, attempt: int = 0) -> str:
+        """✅ برومبت محسّن وأوضح مع تنويع في المحاولات"""
+        
+        # ✅ تنويع الـ prompt في المحاولات المختلفة
+        if attempt == 0:
+            instruction = "⚠️ مهم جداً: يجب أن تكتب محتوى للمنصات الثلاث (FACEBOOK و TWITTER و INSTAGRAM) بالضبط!"
+        elif attempt == 1:
+            instruction = "⚠️ تحذير: يجب كتابة 3 منصات كاملة! لا تكتب منصة واحدة فقط!"
+        else:
+            instruction = "⚠️ هذه المحاولة الأخيرة: اكتب المنصات الثلاث كاملة وإلا سيفشل الطلب!"
         
         return f"""أنت كاتب محتوى محترف لوسائل التواصل الاجتماعي.
 
@@ -567,8 +679,10 @@ class SocialMediaGenerator:
 المحتوى: {report['content'][:1200]}
 
 ═══════════════════════════════════════════════════════════════
-⚠️ مهم جداً: اتبع الشكل التالي بالضبط!
+{instruction}
 ═══════════════════════════════════════════════════════════════
+
+يجب أن تكتب بالشكل التالي بالضبط (3 منصات كاملة):
 
 [FACEBOOK]
 العنوان: (عنوان جذاب من 5-12 كلمة)
@@ -583,14 +697,15 @@ class SocialMediaGenerator:
 المحتوى: (منشور من 400-600 حرف، أسلوب بصري، 5 هاشتاقات)
 
 ═══════════════════════════════════════════════════════════════
-قواعد:
-- استخدم [FACEBOOK] و [TWITTER] و [INSTAGRAM] بالضبط كما هي
-- كل منشور يجب أن يحتوي على "العنوان:" و "المحتوى:"
-- استخدم 2-3 emojis مناسبة
-- الهاشتاقات: ضع _ بين الكلمات (مثال: #فلسطين_الحرة)
+قواعد إلزامية:
+✅ استخدم [FACEBOOK] و [TWITTER] و [INSTAGRAM] بالضبط كما هي (بالأحرف الكبيرة)
+✅ كل منصة يجب أن تحتوي على "العنوان:" و "المحتوى:"
+✅ استخدم 2-3 emojis مناسبة في كل منشور
+✅ الهاشتاقات: ضع _ بين الكلمات (مثال: #فلسطين_الحرة)
+✅ يجب كتابة المنصات الثلاث كاملة - لا تكتب منصة واحدة فقط!
 ═══════════════════════════════════════════════════════════════
 
-اكتب الآن:
+ابدأ الآن بكتابة المنصات الثلاث:
 """
     
     def _format_combined_content(self, all_content: Dict[str, SocialMediaContent]) -> str:
