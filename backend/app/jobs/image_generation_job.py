@@ -17,6 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 from datetime import datetime
 import psycopg2
+
+# إضافة المسار الحالي إلى sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+backend_dir = os.path.dirname(os.path.dirname(current_dir))
+sys.path.insert(0, backend_dir)
+
 from settings import DB_CONFIG
 
 # Logging setup
@@ -81,9 +87,9 @@ def has_reports_without_images(hours: int = CHECK_HOURS) -> tuple:
                 JOIN raw_news rn ON ncm.news_id = rn.id
                 WHERE ncm.cluster_id = gr.cluster_id
                 AND (
-                    rn.image_url IS NOT NULL 
-                    AND rn.image_url != ''
-                    AND rn.image_url != 'null'
+                    rn.content_img IS NOT NULL 
+                    AND rn.content_img != ''
+                    AND rn.content_img != 'null'
                 )
             )
         """, (hours, MAX_FAILURE_ATTEMPTS))
@@ -126,9 +132,9 @@ def has_reports_without_images_simple(hours: int = CHECK_HOURS) -> tuple:
                 JOIN raw_news rn ON ncm.news_id = rn.id
                 WHERE ncm.cluster_id = gr.cluster_id
                 AND (
-                    rn.image_url IS NOT NULL 
-                    AND rn.image_url != ''
-                    AND rn.image_url != 'null'
+                    rn.content_img IS NOT NULL 
+                    AND rn.content_img != ''
+                    AND rn.content_img != 'null'
                 )
             )
         """, (hours,))

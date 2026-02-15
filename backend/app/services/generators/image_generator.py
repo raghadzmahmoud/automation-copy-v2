@@ -681,9 +681,9 @@ No text, no faces, no watermarks
                         JOIN raw_news rn ON ncm.news_id = rn.id
                         WHERE ncm.cluster_id = gr.cluster_id
                         AND (
-                            rn.image_url IS NOT NULL 
-                            AND rn.image_url != ''
-                            AND rn.image_url != 'null'
+                            rn.content_img IS NOT NULL 
+                            AND rn.content_img != ''
+                            AND rn.content_img != 'null'
                         )
                     )
                 ORDER BY gr.created_at DESC
@@ -725,9 +725,9 @@ No text, no faces, no watermarks
                         JOIN raw_news rn ON ncm.news_id = rn.id
                         WHERE ncm.cluster_id = gr.cluster_id
                         AND (
-                            rn.image_url IS NOT NULL 
-                            AND rn.image_url != ''
-                            AND rn.image_url != 'null'
+                            rn.content_img IS NOT NULL 
+                            AND rn.content_img != ''
+                            AND rn.content_img != 'null'
                         )
                     )
                 ORDER BY gr.created_at DESC
