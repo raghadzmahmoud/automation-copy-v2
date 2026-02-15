@@ -535,7 +535,7 @@ async def get_reports_with_complete_content(
     """
     🎯 Get all reports with their available content:
     - Report (required - التقرير النصي)
-    - Image: generated first, fallback to raw_news.image_url
+    - Image: generated first, fallback to raw_news.content_img
     - Audio: if exists in generated_content
     - Social Media: if exists in generated_content
 
@@ -658,13 +658,13 @@ async def get_reports_with_complete_content(
             # ========================================
             if not has_generated_image and cluster_id:
                 cursor.execute("""
-                    SELECT rn.image_url, rn.title
+                    SELECT rn.content_img, rn.title
                     FROM news_cluster_members ncm
                     JOIN raw_news rn ON ncm.news_id = rn.id
                     WHERE ncm.cluster_id = %s
-                    AND rn.image_url IS NOT NULL
-                    AND rn.image_url != ''
-                    AND rn.image_url != 'null'
+                    AND rn.content_img IS NOT NULL
+                    AND rn.content_img != ''
+                    AND rn.content_img != 'null'
                     LIMIT 1
                 """, (cluster_id,))
 
