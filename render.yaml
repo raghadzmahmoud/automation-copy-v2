@@ -1,13 +1,239 @@
 # ═══════════════════════════════════════════════════════════════
-# 🚀 Render Configuration - Sequential Pipeline with Cycle Pattern
+# 🚀 Render Configuration - Hybrid Architecture
 # ═══════════════════════════════════════════════════════════════
-# 
-# Cycle Pattern: Main → Main → Broadcast → repeat
-# Main Cycle: Scraping → Clustering → Reports → Social → Images → Audio → Social Images → Reels → Publishing
-# Broadcast Cycle: Newsletter & Digest Generation
+#
+# 🏗️  Hybrid Architecture:
+#
+#   Cron Workers (scheduled_tasks table):
+#     - production-cron-worker → scraping + broadcast_generation
+#
+#   Queue Workers (news_pipeline_queue table):
+#     - pipeline-clustering-worker → real-time clustering
+#     - pipeline-report-worker     → real-time report generation
+#     - pipeline-image-worker      → real-time image generation
+#
 # ═══════════════════════════════════════════════════════════════
 
 services:
+
+  # ═══════════════════════════════════════════════════════════
+  # ⏰ Cron Worker - scraping + broadcast_generation
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: production-cron-worker
+
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+
+    startCommand: "python worker.py"
+
+    plan: starter
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+
+    envVars:
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      - key: WORKER_TYPE
+        value: cron
+      - key: WORKER_POLL_INTERVAL
+        value: "5"
+      - key: MAX_WORKERS
+        value: "2"
+      - key: MAX_RETRY_COUNT
+        value: "5"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET_NAME
+        value: media-automation-bucket
+      - key: TG_BOT_TOKEN
+        sync: false
+      - key: TG_CHAT_ID
+        value: "-1003517881817"
+      - key: FB_GAZA_ACCESS_TOKEN
+        sync: false
+      - key: FB_GAZA_PAGE_ID
+        value: "893918783798150"
+
+  # ═══════════════════════════════════════════════════════════
+  # 🎯 Pipeline: Clustering Worker (queue-based, real-time)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: pipeline-clustering-worker
+
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+
+    startCommand: "python pipeline_queue_workers.py --stage clustering"
+
+    plan: starter
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+
+    envVars:
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      - key: QUEUE_POLL_INTERVAL
+        value: "2"
+      - key: QUEUE_MAX_ATTEMPTS
+        value: "3"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+  # ═══════════════════════════════════════════════════════════
+  # 📝 Pipeline: Report Worker (queue-based, real-time)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: pipeline-report-worker
+
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+
+    startCommand: "python pipeline_queue_workers.py --stage report_generation"
+
+    plan: standard
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+
+    envVars:
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      - key: QUEUE_POLL_INTERVAL
+        value: "2"
+      - key: QUEUE_MAX_ATTEMPTS
+        value: "3"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: FONTCONFIG_PATH
+        value: /etc/fonts
+      - key: FC_LANG
+        value: ar
+
+  # ═══════════════════════════════════════════════════════════
+  # 🎨 Pipeline: Image Worker (queue-based, real-time)
+  # ═══════════════════════════════════════════════════════════
+  - type: worker
+    name: pipeline-image-worker
+
+    env: docker
+    dockerfilePath: ./backend/Dockerfile.worker
+    dockerContext: ./backend
+
+    startCommand: "python pipeline_queue_workers.py --stage image_generation"
+
+    plan: standard
+    region: oregon
+    numInstances: 1
+    autoDeploy: true
+
+    envVars:
+      - key: DB_NAME
+        value: automation_db_mbly
+      - key: DB_USER
+        value: automation_db_mbly_user
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        value: dpg-d4co200dl3ps73bk1ufg-a.oregon-postgres.render.com
+      - key: DB_PORT
+        value: "5432"
+      - key: QUEUE_POLL_INTERVAL
+        value: "2"
+      - key: QUEUE_MAX_ATTEMPTS
+        value: "3"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-2.5-flash-image
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONPATH
+        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET_NAME
+        value: media-automation-bucket
+      - key: FONTCONFIG_PATH
+        value: /etc/fonts
+      - key: FC_LANG
+        value: ar
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /ms-playwright
+
+  # ═══════════════════════════════════════════════════════════
+  # 🕐 Production Scheduler Service (legacy)
+  # ═══════════════════════════════════════════════════════════
+
   # ═══════════════════════════════════════════════════════════
   # 🕐 Production Scheduler Service (Task Scheduler)
   # ═══════════════════════════════════════════════════════════

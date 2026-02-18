@@ -1,83 +1,140 @@
-# 🐳 Docker Compose for Local Development
+# 🐳 Docker Compose - Hybrid Architecture
 # ═══════════════════════════════════════════════════════════════
-# يشغل الـ worker المحسن محلياً للتطوير والاختبار
+# 🏗️  Hybrid Architecture:
+#
+#   Cron Worker (worker.py):
+#     - scraping          → جلب الأخبار بشكل دوري
+#     - broadcast_generation → توليد البث بشكل دوري
+#
+#   Pipeline Queue Workers (pipeline_queue_workers.py):
+#     - clustering_worker    → real-time per news
+#     - report_worker        → real-time per news
+#     - image_worker         → real-time per news
 # ═══════════════════════════════════════════════════════════════
 
 version: '3.8'
 
+# ─────────────────────────────────────────────────────────────
+# Shared environment (يُستخدم في كل الـ services)
+# ─────────────────────────────────────────────────────────────
+x-common-env: &common-env
+  DB_NAME: ${DB_NAME:-automation_db}
+  DB_USER: ${DB_USER:-postgres}
+  DB_PASSWORD: ${DB_PASSWORD:-password}
+  DB_HOST: ${DB_HOST:-host.docker.internal}
+  DB_PORT: ${DB_PORT:-5432}
+  ENVIRONMENT: development
+  DEBUG: "True"
+  LOG_LEVEL: INFO
+  GEMINI_API_KEY: ${GEMINI_API_KEY}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  FB_GAZA_ACCESS_TOKEN: ${FB_GAZA_ACCESS_TOKEN}
+  TG_BOT_TOKEN: ${TG_BOT_TOKEN}
+  PYTHONPATH: /app
+  PYTHONUNBUFFERED: "1"
+
+x-common-build: &common-build
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.worker
+  volumes:
+    - ./backend:/app
+    - worker-logs:/app/logs
+  restart: unless-stopped
+  networks:
+    - automation-network
+
 services:
+
   # ═══════════════════════════════════════════════════════════
-  # 🔄 Improved Worker Service
+  # ⏰ Cron Worker - scraping + broadcast_generation
   # ═══════════════════════════════════════════════════════════
-  worker-improved:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.worker
-    container_name: automation-worker-improved
-    
-    # Environment variables for local development
+  cron-worker:
+    <<: *common-build
+    container_name: automation-cron-worker
+    command: python worker.py
     environment:
-      # Database (use your local/test DB)
-      - DB_NAME=${DB_NAME:-automation_db}
-      - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-password}
-      - DB_HOST=${DB_HOST:-host.docker.internal}
-      - DB_PORT=${DB_PORT:-5432}
-      
-      # Application
-      - ENVIRONMENT=development
-      - DEBUG=True
-      - LOG_LEVEL=DEBUG
-      
-      # Worker Configuration (Enhanced)
-      - WORKER_TYPE=improved
-      - MAX_PARALLEL_JOBS=3
-      - DEFAULT_JOB_TIMEOUT=300
-      - ENABLE_JOB_TIMEOUTS=true
-      - ENABLE_PARALLEL_EXECUTION=true
-      - BROADCAST_MODE=unified
-      - CYCLE_INTERVAL=120
-      - REEL_BATCH_SIZE=4
-      
-      # Job Timeouts (shorter for development)
-      - SCRAPING_TIMEOUT=300
-      - CLUSTERING_TIMEOUT=120
-      - REPORTS_TIMEOUT=180
-      - SOCIAL_MEDIA_TIMEOUT=120
-      - IMAGES_TIMEOUT=600
-      - AUDIO_TIMEOUT=300
-      - VIDEO_TIMEOUT=600
-      - PUBLISHING_TIMEOUT=180
-      - BROADCAST_TIMEOUT=600
-      
-      # API Keys (set these in .env file)
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - FB_GAZA_ACCESS_TOKEN=${FB_GAZA_ACCESS_TOKEN}
-      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
-      
-      # Python
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
-    
-    # Mount code for development (hot reload)
-    volumes:
-      - ./backend:/app
-      - worker-logs:/app/logs
-    
-    # Restart policy
-    restart: unless-stopped
-    
-    # Health check
+      <<: *common-env
+      WORKER_TYPE: cron
+      MAX_WORKERS: "2"
+      WORKER_POLL_INTERVAL: "5"
     healthcheck:
-      test: ["CMD", "python", "-c", "print('Worker health check')"]
+      test: ["CMD", "python", "-c", "import psycopg2; print('ok')"]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 30s
-    
-    # Network
+
+  # ═══════════════════════════════════════════════════════════
+  # 🎯 Clustering Worker - real-time queue-based
+  # ═══════════════════════════════════════════════════════════
+  clustering-worker:
+    <<: *common-build
+    container_name: automation-clustering-worker
+    command: python pipeline_queue_workers.py --stage clustering
+    environment:
+      <<: *common-env
+      QUEUE_POLL_INTERVAL: "2"
+      QUEUE_MAX_ATTEMPTS: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import psycopg2; print('ok')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ═══════════════════════════════════════════════════════════
+  # 📝 Report Worker - real-time queue-based
+  # ═══════════════════════════════════════════════════════════
+  report-worker:
+    <<: *common-build
+    container_name: automation-report-worker
+    command: python pipeline_queue_workers.py --stage report_generation
+    environment:
+      <<: *common-env
+      QUEUE_POLL_INTERVAL: "2"
+      QUEUE_MAX_ATTEMPTS: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import psycopg2; print('ok')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ═══════════════════════════════════════════════════════════
+  # 🎨 Image Worker - real-time queue-based
+  # ═══════════════════════════════════════════════════════════
+  image-worker:
+    <<: *common-build
+    container_name: automation-image-worker
+    command: python pipeline_queue_workers.py --stage image_generation
+    environment:
+      <<: *common-env
+      QUEUE_POLL_INTERVAL: "2"
+      QUEUE_MAX_ATTEMPTS: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import psycopg2; print('ok')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ═══════════════════════════════════════════════════════════
+  # 🔄 Legacy Worker (للتوافق - يمكن إزالته لاحقاً)
+  # ═══════════════════════════════════════════════════════════
+  worker-improved:
+    <<: *common-build
+    container_name: automation-worker-improved
+    command: python worker.py
+    environment:
+      <<: *common-env
+      WORKER_TYPE: improved
+      MAX_WORKERS: "3"
+      WORKER_POLL_INTERVAL: "3"
+      BROADCAST_MODE: unified
+    profiles:
+      - legacy
     networks:
       - automation-network
 

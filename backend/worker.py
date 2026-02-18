@@ -1,10 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-⚙️ Production Worker - Parallel Job Executor
+⚙️ Cron Worker - Scheduled Tasks Executor
 ═══════════════════════════════════════════════════════════════
+🏗️  Hybrid Architecture:
+
+  هذا الـ worker مسؤول فقط عن:
+    ✅ scraping          - جلب الأخبار (cron)
+    ✅ broadcast_generation - توليد البث (cron)
+
+  الـ real-time pipeline (clustering → report → image)
+  تشتغل في pipeline_queue_workers.py (queue-based)
+
 وظيفة الـ Worker:
-- يجلب المهام المستحقة (due tasks)
+- يجلب المهام المستحقة من scheduled_tasks (cron-based)
 - يقفل المهمة بـ FOR UPDATE SKIP LOCKED
 - ينفذ الـ job
 - يسجل النتائج في scheduled_task_logs
@@ -321,32 +330,46 @@ def complete_task(task: Dict, success: bool, execution_time: float,
 # ═══════════════════════════════════════════════════════════════
 
 def import_job_functions():
-    """Import all job functions"""
+    """
+    Import job functions للـ cron-based tasks فقط.
+
+    ⚠️  clustering / report_generation / image_generation
+         انتقلت لـ pipeline_queue_workers.py (queue-based)
+         ولا تُشغَّل هنا.
+    """
     try:
         from app.jobs.scraper_job import scrape_news
-        from app.jobs.clustering_job import cluster_news
-        from app.jobs.reports_job import generate_reports
-        from app.jobs.social_media_job import generate_social_media_content
-        from app.jobs.image_generation_job import generate_images
-        from app.jobs.audio_generation_job import generate_audio
         from app.jobs.broadcast_job import generate_all_broadcasts
-        from app.jobs.audio_transcription_job import run_audio_transcription_job
-        from app.jobs.processing_pipeline_job import run_processing_pipeline
-        
-        return {
-            'scraping': scrape_news,
-            'clustering': cluster_news,
-            'report_generation': generate_reports,
-            'social_media_generation': generate_social_media_content,
-            'image_generation': generate_images,
-            'audio_generation': generate_audio,
+
+        job_registry = {
+            # ─── Cron-based (يضلوا هنا) ───────────────────────────
+            'scraping':             scrape_news,
             'broadcast_generation': generate_all_broadcasts,
-            'bulletin_generation': generate_all_broadcasts,  # alias
-            'digest_generation': generate_all_broadcasts,    # alias
-            'audio_transcription': run_audio_transcription_job,
-            'processing_pipeline': run_processing_pipeline,
+            'bulletin_generation':  generate_all_broadcasts,  # alias
+            'digest_generation':    generate_all_broadcasts,  # alias
         }
-        
+
+        # ─── Optional jobs (يُضافون إذا كانوا موجودين) ────────────
+        try:
+            from app.jobs.social_media_job import generate_social_media_content
+            job_registry['social_media_generation'] = generate_social_media_content
+        except ImportError:
+            pass
+
+        try:
+            from app.jobs.audio_generation_job import generate_audio
+            job_registry['audio_generation'] = generate_audio
+        except ImportError:
+            pass
+
+        try:
+            from app.jobs.audio_transcription_job import run_audio_transcription_job
+            job_registry['audio_transcription'] = run_audio_transcription_job
+        except ImportError:
+            pass
+
+        return job_registry
+
     except Exception as e:
         logger.error(f"❌ Error importing job functions: {e}")
         return {}
@@ -519,8 +542,10 @@ def main():
     global running
     
     logger.info("═"*70)
-    logger.info(f"⚙️ Production Worker Starting - {WORKER_ID}")
-    logger.info("   ✅ Parallel job execution")
+    logger.info(f"⚙️  Cron Worker Starting - {WORKER_ID}")
+    logger.info("   🏗️  Hybrid Architecture Mode")
+    logger.info("   ✅ Handles: scraping + broadcast_generation (cron-based)")
+    logger.info("   ℹ️  clustering/report/image → pipeline_queue_workers.py")
     logger.info("   ✅ Database locking (FOR UPDATE SKIP LOCKED)")
     logger.info("   ✅ Retry with exponential backoff")
     logger.info("   ✅ Concurrent run limits")
@@ -640,8 +665,7 @@ def main():
     task_queue.join()
     
     logger.info("\n" + "═"*70)
-    logger.info(f"🛑 Worker {WORKER_ID} stopped gracefully")
-    logger.info(f"📊 Total jobs executed: {jobs_executed}")
+    logger.info(f"🛑 Cron Worker {WORKER_ID} stopped gracefully")
     logger.info(f"📊 Total jobs executed: {jobs_executed}")
     logger.info("═"*70)
 

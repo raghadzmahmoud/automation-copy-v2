@@ -85,12 +85,13 @@ class ScrapeResult:
     source_type: str
     source_type_id: int = 0
     source_id: int = 0
-    
+
     extracted: int = 0
     saved: int = 0
     skipped: int = 0
-    
+
     items: List[Dict] = field(default_factory=list)
+    saved_ids: List[int] = field(default_factory=list)  # ✅ IDs الأخبار المحفوظة
     error: Optional[str] = None
     time_seconds: float = 0.0
 
@@ -198,28 +199,29 @@ class RssScraper:
             news_items = []
             saved_count = 0
             skipped_count = 0
-            
+            saved_ids = []  # ✅ نجمع الـ IDs
+
             for entry in feed.entries[:max_items]:
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "")
-                
+
                 if not title:
                     continue
-                
+
                 # Deduplication
                 if title in existing_titles:
                     skipped_count += 1
                     continue
-                
+
                 # استخراج المحتوى
                 content = self._get_content(entry)
                 image = self._get_image(entry)
                 pub_date = self._get_date(entry)
-                
+
                 # التصنيف
                 category, tags_str = self._classify(title, content)
                 category_id = get_or_create_category_id(category)
-                
+
                 news_item = {
                     "title": title,
                     "content_text": self._clean_html(content),
@@ -236,17 +238,19 @@ class RssScraper:
                     "metadata": json.dumps({"feed_url": feed_url}),
                     "published_at": pub_date,
                 }
-                
+
                 news_items.append(news_item)
-                
+
                 if save_to_db:
-                    if save_news_item(news_item, existing_titles):
+                    news_id = save_news_item(news_item, existing_titles)
+                    if news_id:  # ✅ news_id هو int أو None
                         saved_count += 1
+                        saved_ids.append(news_id)  # ✅ نجمع الـ ID
                         existing_titles.add(title)
-                        print(f"   ✅ {title[:50]}...")
+                        print(f"   ✅ [{news_id}] {title[:50]}...")
                     else:
                         skipped_count += 1
-            
+
             return ScrapeResult(
                 success=True,
                 url=feed_url,
@@ -256,7 +260,8 @@ class RssScraper:
                 extracted=len(news_items),
                 saved=saved_count,
                 skipped=skipped_count,
-                items=news_items
+                items=news_items,
+                saved_ids=saved_ids,  # ✅
             )
             
         except Exception as e:
@@ -436,17 +441,18 @@ class TelegramScraper:
         news_items = []
         saved_count = 0
         skipped_count = 0
-        
+        saved_ids = []  # ✅ نجمع الـ IDs
+
         for msg in messages[:max_items]:
             try:
                 # استخراج message_id
                 msg_link = msg.get('data-post', '')
                 message_id = msg_link.split('/')[-1] if '/' in msg_link else ''
-                
+
                 # استخراج النص
                 text_elem = msg.select_one('.tgme_widget_message_text')
                 text = text_elem.get_text(strip=True) if text_elem else ""
-                
+
                 # تحديد نوع المحتوى
                 msg_type = "text"
                 if msg.select_one('.tgme_widget_message_photo'):
@@ -457,17 +463,16 @@ class TelegramScraper:
                     msg_type = "audio"
                 elif msg.select_one('.tgme_widget_message_document'):
                     msg_type = "document"
-                
+
                 # استخراج الصورة
                 image_url = None
                 photo_elem = msg.select_one('.tgme_widget_message_photo')
                 if photo_elem:
                     style = photo_elem.get('style', '')
-                    # استخراج URL من background-image
                     match = re.search(r"url\(['\"]?(.*?)['\"]?\)", style)
                     if match:
                         image_url = match.group(1)
-                
+
                 # استخراج التاريخ
                 time_elem = msg.select_one('.tgme_widget_message_date time')
                 pub_date = None
@@ -476,7 +481,7 @@ class TelegramScraper:
                         pub_date = date_parser.parse(time_elem['datetime'])
                     except:
                         pass
-                
+
                 # توليد العنوان
                 if text:
                     title = text.split("\n", 1)[0][:100].strip()
@@ -484,24 +489,24 @@ class TelegramScraper:
                 else:
                     title = f"[{msg_type.upper()}]"
                     content = f"[{msg_type.upper()} MESSAGE]"
-                
+
                 # تخطي إذا العنوان قصير جداً
                 if len(title) < 5 and msg_type == "text":
                     continue
-                
+
                 # رابط الرسالة
                 message_link = f"https://t.me/{username}/{message_id}" if message_id else channel_url
-                
+
                 # Deduplication
                 dedup_key = f"{username}_{message_id}"
                 if title in existing_titles or dedup_key in existing_titles:
                     skipped_count += 1
                     continue
-                
+
                 # التصنيف
                 category, tags_str = self._classify(title, content)
                 category_id = get_or_create_category_id(category)
-                
+
                 news_item = {
                     "title": title,
                     "content_text": content,
@@ -523,24 +528,26 @@ class TelegramScraper:
                     }),
                     "published_at": pub_date or datetime.now(timezone.utc),
                 }
-                
+
                 news_items.append(news_item)
-                
+
                 if save_to_db:
-                    if save_news_item(news_item, existing_titles):
+                    news_id = save_news_item(news_item, existing_titles)
+                    if news_id:  # ✅ news_id هو int أو None
                         saved_count += 1
+                        saved_ids.append(news_id)  # ✅ نجمع الـ ID
                         existing_titles.add(title)
                         existing_titles.add(dedup_key)
-                        print(f"   ✅ [{msg_type}] {title[:50]}...")
+                        print(f"   ✅ [{news_id}] [{msg_type}] {title[:50]}...")
                     else:
                         skipped_count += 1
                 else:
                     print(f"   📝 [{msg_type}] {title[:50]}...")
-                    
+
             except Exception as e:
                 print(f"   ⚠️ Error parsing message: {e}")
                 continue
-        
+
         return ScrapeResult(
             success=len(news_items) > 0,
             url=channel_url,
@@ -550,7 +557,8 @@ class TelegramScraper:
             extracted=len(news_items),
             saved=saved_count,
             skipped=skipped_count,
-            items=news_items
+            items=news_items,
+            saved_ids=saved_ids,  # ✅
         )
     
     def _scrape_with_api(
@@ -616,10 +624,11 @@ class TelegramScraper:
             news_items = []
             saved_count = 0
             skipped_count = 0
-            
+            saved_ids = []  # ✅ نجمع الـ IDs
+
             async for message in client.iter_messages(username, limit=max_items):
                 text = (message.text or "").strip()
-                
+
                 msg_type = "text"
                 if message.photo:
                     msg_type = "photo"
@@ -629,27 +638,27 @@ class TelegramScraper:
                     msg_type = "audio"
                 elif message.document:
                     msg_type = "document"
-                
+
                 if text:
                     title = text.split("\n", 1)[0][:100].strip()
                     content = text
                 else:
                     title = f"[{msg_type.upper()}]"
                     content = f"[{msg_type.upper()} MESSAGE]"
-                
+
                 if len(title) < 5 and msg_type == "text":
                     continue
-                
+
                 message_link = f"https://t.me/{username}/{message.id}"
-                
+
                 dedup_key = f"{username}_{message.id}"
                 if title in existing_titles or dedup_key in existing_titles:
                     skipped_count += 1
                     continue
-                
+
                 category, tags_str = self._classify(title, content)
                 category_id = get_or_create_category_id(category)
-                
+
                 news_item = {
                     "title": title,
                     "content_text": content,
@@ -671,22 +680,24 @@ class TelegramScraper:
                     }),
                     "published_at": message.date.replace(tzinfo=timezone.utc) if message.date else datetime.now(timezone.utc),
                 }
-                
+
                 news_items.append(news_item)
-                
+
                 if save_to_db:
-                    if save_news_item(news_item, existing_titles):
+                    news_id = save_news_item(news_item, existing_titles)
+                    if news_id:  # ✅ news_id هو int أو None
                         saved_count += 1
+                        saved_ids.append(news_id)  # ✅ نجمع الـ ID
                         existing_titles.add(title)
                         existing_titles.add(dedup_key)
-                        print(f"   ✅ [{msg_type}] {title[:50]}...")
+                        print(f"   ✅ [{news_id}] [{msg_type}] {title[:50]}...")
                     else:
                         skipped_count += 1
                 else:
                     print(f"   📝 [{msg_type}] {title[:50]}...")
-            
+
             await client.disconnect()
-            
+
             return ScrapeResult(
                 success=len(news_items) > 0,
                 url=channel_url,
@@ -696,7 +707,8 @@ class TelegramScraper:
                 extracted=len(news_items),
                 saved=saved_count,
                 skipped=skipped_count,
-                items=news_items
+                items=news_items,
+                saved_ids=saved_ids,  # ✅
             )
             
         except Exception as e:
@@ -855,48 +867,45 @@ class WebScraper:
         saved_count = 0
         skipped_count = 0
         failed_count = 0
-        
+        saved_ids = []  # ✅ نجمع الـ IDs
+
         for i, candidate in enumerate(candidates):
-            # توقف إذا وصلنا للحد المطلوب
             if len(news_items) >= self.max_articles:
                 break
-            
+
             link = candidate['url']
             anchor = candidate['anchor']
-            
+
             print(f"\n   📰 [{i+1}] Fetching: {link[:60]}...")
-            
+
             article = self._fetch_article(link, config)
-            
-            # ✅ تحقق: هل نجح الجلب وهل هناك محتوى كافي؟
+
             if not article:
                 print(f"      ⚠️ Failed to fetch")
                 failed_count += 1
                 continue
-            
+
             title = article.get("title", "").strip()
             content = article.get("content", "")
-            
+
             if not title or len(title) < 10:
                 print(f"      ⚠️ No title, skip")
                 failed_count += 1
                 continue
-            
+
             if len(content) < MIN_CONTENT_LENGTH:
                 print(f"      ⚠️ Content too short ({len(content)} chars), skip")
                 failed_count += 1
                 continue
-            
-            # Deduplication
+
             if title in existing_titles:
                 print(f"      ⏭️ Skip (exists): {title[:40]}...")
                 skipped_count += 1
                 continue
-            
-            # التصنيف
+
             category, tags_str = self._classify(title, content)
             category_id = get_or_create_category_id(category)
-            
+
             news_item = {
                 "title": title,
                 "content_text": content,
@@ -913,24 +922,26 @@ class WebScraper:
                 "metadata": json.dumps({"scraped_from": url}),
                 "published_at": article.get("date") or datetime.now(timezone.utc),
             }
-            
+
             news_items.append(news_item)
-            
+
             if save_to_db:
-                if save_news_item(news_item, existing_titles):
+                news_id = save_news_item(news_item, existing_titles)
+                if news_id:  # ✅ news_id هو int أو None
                     saved_count += 1
+                    saved_ids.append(news_id)  # ✅ نجمع الـ ID
                     existing_titles.add(title)
-                    print(f"      ✅ Saved: {title[:50]}...")
+                    print(f"      ✅ [{news_id}] Saved: {title[:50]}...")
                 else:
                     skipped_count += 1
                     print(f"      ⏭️ Skipped (DB)")
             else:
                 print(f"      📝 {title[:50]}...")
-            
-            time.sleep(1)  # تأخير
-        
+
+            time.sleep(1)
+
         print(f"\n   📊 Summary: {len(news_items)} extracted, {failed_count} failed, {skipped_count} skipped")
-        
+
         return ScrapeResult(
             success=len(news_items) > 0,
             url=url,
@@ -940,7 +951,8 @@ class WebScraper:
             extracted=len(news_items),
             saved=saved_count,
             skipped=skipped_count,
-            items=news_items
+            items=news_items,
+            saved_ids=saved_ids,  # ✅
         )
     
     def _get_config(self, domain: str) -> Dict:

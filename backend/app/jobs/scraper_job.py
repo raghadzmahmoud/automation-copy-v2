@@ -3,14 +3,15 @@
 📥 News Scraper Job (Condition-Based)
 
 ⚠️ لا يوجد تحقق من الوقت هنا!
-   الـ Scheduler (start_worker.py) هو المتحكم بالوقت
+   الـ Scheduler (worker.py) هو المتحكم بالوقت
 
 Behavior:
 - يسحب من كل المصادر النشطة
 - يتحقق فقط من: هل المصدر جاهز للسحب؟ (minutes_since_fetch)
 - 8 أخبار من كل مصدر
+- ✅ بعد الحفظ: يعمل enqueue للـ clustering في news_pipeline_queue
 
-Usage: Called by start_worker.py scheduler
+Usage: Called by worker.py (cron-based scheduled_tasks)
 """
 
 import sys
@@ -82,6 +83,53 @@ def is_processing_pipeline_running() -> bool:
     except Exception as e:
         logger.error(f"Error checking pipeline status: {e}")
         return False
+
+
+def enqueue_news_for_clustering(news_ids: list) -> int:
+    """
+    ✅ إضافة الأخبار الجديدة لـ news_pipeline_queue → clustering
+
+    يُستدعى بعد حفظ الأخبار مباشرة لإطلاق الـ real-time pipeline.
+    يستخدم ON CONFLICT DO NOTHING لتجنب التكرار.
+
+    Args:
+        news_ids: قائمة IDs الأخبار المحفوظة حديثاً
+
+    Returns:
+        عدد الأخبار المُضافة فعلاً للـ queue
+    """
+    if not news_ids:
+        return 0
+
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        count = 0
+
+        for news_id in news_ids:
+            cursor.execute("""
+                INSERT INTO news_pipeline_queue (news_id, stage, status, next_run_at)
+                VALUES (%s, 'clustering', 'pending', NOW())
+                ON CONFLICT DO NOTHING
+            """, (news_id,))
+            count += cursor.rowcount
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if count > 0:
+            logger.info(f"📬 Enqueued {count} news items for clustering")
+
+        return count
+
+    except psycopg2.errors.UndefinedTable:
+        # جدول news_pipeline_queue غير موجود بعد (قبل تشغيل الـ migration)
+        logger.warning("⚠️  news_pipeline_queue table not found - run migration first")
+        return 0
+    except Exception as e:
+        logger.error(f"❌ Error enqueuing news for clustering: {e}")
+        return 0
 
 
 def get_active_sources():
@@ -173,6 +221,7 @@ def scrape_news() -> dict:
     total_news = 0
     success_count = 0
     failed_count = 0
+    all_saved_ids = []   # ✅ جمع IDs الأخبار المحفوظة للـ enqueue
 
     for source in sources:
         source_id = source[0]
@@ -198,6 +247,9 @@ def scrape_news() -> dict:
                     f"   ✅ Extracted={result.extracted}, "
                     f"Saved={result.saved}, Skipped={result.skipped}"
                 )
+                # ✅ جمع IDs الأخبار المحفوظة (إذا كانت متاحة)
+                if hasattr(result, 'saved_ids') and result.saved_ids:
+                    all_saved_ids.extend(result.saved_ids)
             else:
                 failed_count += 1
                 logger.warning(f"   ⚠️ {result.error}")
@@ -205,6 +257,17 @@ def scrape_news() -> dict:
         except Exception as e:
             failed_count += 1
             logger.error(f"   ❌ Error: {e}")
+
+    # ✅ Enqueue الأخبار الجديدة للـ real-time pipeline
+    enqueued_count = 0
+    if all_saved_ids:
+        # ✅ الحالة الطبيعية: IDs متاحة مباشرة من الـ scraper
+        logger.info(f"📬 Enqueuing {len(all_saved_ids)} news items for clustering pipeline...")
+        enqueued_count = enqueue_news_for_clustering(all_saved_ids)
+    elif total_news > 0:
+        # ⚠️ Safety net: نادراً ما يحدث بعد إضافة saved_ids للـ ScrapeResult
+        logger.warning("⚠️ saved_ids not available, using DB fallback")
+        enqueued_count = _enqueue_latest_news(total_news)
 
     # Summary
     duration = (datetime.now() - start_time).total_seconds()
@@ -214,6 +277,8 @@ def scrape_news() -> dict:
     logger.info(f"   ✅ Successful: {success_count}")
     logger.info(f"   ❌ Failed: {failed_count}")
     logger.info(f"   📰 News saved: {total_news}")
+    if enqueued_count > 0:
+        logger.info(f"   📬 Enqueued for pipeline: {enqueued_count}")
     logger.info("=" * 60)
 
     return {
@@ -221,9 +286,59 @@ def scrape_news() -> dict:
         'success': success_count,
         'failed': failed_count,
         'news_saved': total_news,
+        'enqueued': enqueued_count,
         'duration': duration,
         'skipped': False
     }
+
+
+def _enqueue_latest_news(limit: int) -> int:
+    """
+    ⚠️ Safety net fallback: جلب آخر الأخبار وإضافتها للـ queue.
+
+    بعد إضافة saved_ids لـ ScrapeResult، هذا الـ fallback
+    لن يُستدعى إلا في حالات استثنائية جداً.
+
+    Args:
+        limit: عدد الأخبار للجلب
+
+    Returns:
+        عدد الأخبار المُضافة للـ queue
+    """
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        # جلب آخر الأخبار المحفوظة اللي ما دخلت الـ queue بعد
+        cursor.execute("""
+            SELECT rn.id
+            FROM raw_news rn
+            WHERE rn.collected_at >= NOW() - INTERVAL '10 minutes'
+              AND NOT EXISTS (
+                  SELECT 1 FROM news_pipeline_queue npq
+                  WHERE npq.news_id = rn.id
+                    AND npq.stage = 'clustering'
+              )
+            ORDER BY rn.collected_at DESC
+            LIMIT %s
+        """, (limit,))
+
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not rows:
+            return 0
+
+        news_ids = [r[0] for r in rows]
+        return enqueue_news_for_clustering(news_ids)
+
+    except psycopg2.errors.UndefinedTable:
+        logger.warning("⚠️  news_pipeline_queue table not found - run migration first")
+        return 0
+    except Exception as e:
+        logger.error(f"❌ Error in _enqueue_latest_news: {e}")
+        return 0
 
 
 if __name__ == "__main__":

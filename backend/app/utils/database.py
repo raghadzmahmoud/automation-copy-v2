@@ -704,19 +704,23 @@ def get_all_recent_titles(limit: int = 100) -> Set[str]:
 # 📰 News - Save (مع source_type_id)
 # ============================================
 
-def save_news_item(news: Dict, existing_titles: Set[str] = None) -> bool:
+def save_news_item(news: Dict, existing_titles: Set[str] = None) -> Optional[int]:
     """
     ✅ حفظ خبر في raw_news
-    
+
     Required fields:
         - title: عنوان الخبر
         - source_id: ID المصدر (من جدول sources)
         - source_type_id: نوع المصدر (يجلب من get_source_type_id)
         - source_url: رابط الخبر نفسه ✅
-    
+
     Args:
         news: بيانات الخبر
         existing_titles: مجموعة العناوين الموجودة (للتحقق السريع)
+
+    Returns:
+        int: news_id إذا تم الحفظ بنجاح
+        None: إذا تم تخطيه (تكرار) أو حدث خطأ
     """
     conn = get_db_connection()
     if not conn:
@@ -735,7 +739,7 @@ def save_news_item(news: Dict, existing_titles: Set[str] = None) -> bool:
             print(f"   ⚠️ Skip: Missing title or source_id")
             cursor.close()
             conn.close()
-            return False
+            return None
 
         # ----------------------------------
         # 🛑 Deduplication
@@ -745,19 +749,19 @@ def save_news_item(news: Dict, existing_titles: Set[str] = None) -> bool:
                 print(f"   ⏭️ Skip (exists): {title[:50]}...")
                 cursor.close()
                 conn.close()
-                return False
+                return None
         else:
             cursor.execute("""
                 SELECT id FROM raw_news
                 WHERE title = %s AND source_id = %s
                 LIMIT 1
             """, (title, source_id))
-            
+
             if cursor.fetchone():
                 print(f"   ⏭️ Skip (duplicate): {title[:50]}...")
                 cursor.close()
                 conn.close()
-                return False
+                return None
 
         # ----------------------------------
         # 🧾 Insert (مع source_type_id)
@@ -796,6 +800,7 @@ def save_news_item(news: Dict, existing_titles: Set[str] = None) -> bool:
                 %(published_at)s,
                 %(collected_at)s
             )
+            RETURNING id
         """
 
         payload = {
@@ -817,18 +822,19 @@ def save_news_item(news: Dict, existing_titles: Set[str] = None) -> bool:
         }
 
         cursor.execute(insert_query, payload)
+        new_id = cursor.fetchone()[0]   # ✅ نجلب الـ ID الجديد
         conn.commit()
 
         cursor.close()
         conn.close()
-        return True
+        return new_id   # ✅ نرجع ID بدل True
 
     except Exception as e:
         print(f"❌ Error saving raw_news: {e}")
         if conn:
             conn.rollback()
             conn.close()
-        return False
+        return None
 
 
 def save_news_batch(news_list: List[Dict], source_id: int = None) -> int:
@@ -861,7 +867,8 @@ def save_news_batch(news_list: List[Dict], source_id: int = None) -> int:
             continue
         
         # محاولة الحفظ
-        if save_news_item(news, existing_titles):
+        news_id = save_news_item(news, existing_titles)
+        if news_id:  # int (truthy) = نجح، None (falsy) = تخطي/خطأ
             saved_count += 1
             existing_titles.add(title)
         else:
