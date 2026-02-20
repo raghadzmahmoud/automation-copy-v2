@@ -32,15 +32,11 @@ RUN apt-get clean && \
         gcc \
         g++ \
         libpq-dev \
-        fontconfig \
-        fonts-noto \
-        fonts-noto-arabic \
         ffmpeg \
         ca-certificates \
         curl \
         wget \
         gnupg && \
-    fc-cache -fv && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
 
